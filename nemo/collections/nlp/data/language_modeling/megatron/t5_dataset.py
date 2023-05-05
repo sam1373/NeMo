@@ -27,6 +27,7 @@ from nemo.collections.nlp.data.language_modeling.megatron.dataset_utils import (
 )
 from nemo.collections.nlp.data.language_modeling.megatron.gpt_dataset import _build_index_mappings
 from nemo.core import Dataset
+from nemo.collections.nlp.data.language_modeling.megatron.dataset_utils import DSET_TYPE_UL2, DSET_TYPE_UL2COLT5
 
 
 class T5Dataset(Dataset):
@@ -136,9 +137,6 @@ class T5Dataset(Dataset):
         Class-specific build method to be overridden by child classes.
         """
         self.sentinel_tokens = self.tokenizer.additional_special_tokens_ids
-        if len(self.sentinel_tokens) == 0:
-            # fix until https://github.com/NVIDIA/NeMo/pull/6256 is merged
-            self.sentinel_tokens = [self.tokenizer.text_to_ids(f'<extra_id_{i}>')[0] for i in range(1000)]
         assert len(self.sentinel_tokens) > 0
 
     def __len__(self):

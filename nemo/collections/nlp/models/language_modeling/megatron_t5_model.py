@@ -50,20 +50,21 @@ class MegatronT5Model(MegatronLMEncoderDecoderModel):
 
     def _validate_cfg(self):
         """Class-specific cfg validation"""
+        dataset_type = self._cfg.data.get('dataset_type', None)
         # Make sure the user specifies dataset type as either 't5' or 't5_prefix_lm' only.
-        if self._cfg.data.get('dataset_type', None) is not None:
-            if self._cfg.data.get('dataset_type') not in ['t5', 't5_prefix_lm', 'ul2']:
+        if dataset_type is not None:
+            if dataset_type not in ['t5', 't5_prefix_lm', 'ul2', 'ul2colt5']:
                 raise ValueError(
-                    f"dataset_type must be either 't5', 't5_prefix_lm' or 'ul2'. found {self._cfg.data.get('dataset_type')}"
+                    f"dataset_type must be either 't5', 't5_prefix_lm' or 'ul2'. found {dataset_type}"
                 )
 
-        if hasattr(self._cfg.data, 'seq_length_dec') and self._cfg.data.get('dataset_type') == 't5':
+        if hasattr(self._cfg.data, 'seq_length_dec') and dataset_type == 't5':
             if self._cfg.data.seq_length_dec < self._cfg.data.seq_length * self._cfg.data.masked_lm_prob:
                 raise ValueError(
                     f"Cannot have decoder max sequence length ({self._cfg.data.seq_length_dec}) less than encoder sequence length ({self._cfg.data.seq_length}) * masked_lm_prob ({self._cfg.data.masked_lm_prob})"
                 )
 
-        if self._cfg.data.get("dataset_type", "t5") == "ul2":
+        if dataset_type == "ul2":
             if self._cfg.data.seq_length_dec != self._cfg.data.seq_length:
                 raise ValueError(
                     f"Encoder and decoder sequence lengths must be the same while using the UL2 dataset type. Found encoder length {self._cfg.data.seq_length} and decoder length {self._cfg.data.seq_length_dec}"
@@ -75,6 +76,19 @@ class MegatronT5Model(MegatronLMEncoderDecoderModel):
                 raise ValueError(
                     f"Not enough sentinel tokens specified. Need at least {math.ceil(self._cfg.data.seq_length * self._cfg.data.extreme_masked_lm_prob)} sentinel tokens. Found {self._cfg.tokenizer.num_sentinel_tokens}"
                 )
+        elif dataset_type == "ul2colt5":
+            logging.warning("Using UL2CoLT5 dataset type.")
+            # if self._cfg.data.seq_length_dec != self._cfg.data.seq_length:
+            #     print(
+            #         f"Encoder and decoder sequence lengths must be the same while using the UL2 dataset for CoLT5. Found encoder length {self._cfg.data.seq_length} and decoder length {self._cfg.data.seq_length_dec}"
+            #     )
+            if (
+                self._cfg.tokenizer.num_sentinel_tokens < self._cfg.data.seq_length * self._cfg.data.extreme_masked_lm_prob
+            ):
+                raise ValueError(
+                    f"Not enough sentinel tokens specified. Need at least {math.ceil(self._cfg.data.seq_length * self._cfg.data.extreme_masked_lm_prob)} sentinel tokens. Found {self._cfg.tokenizer.num_sentinel_tokens}"
+                )    
+        
 
     @property
     def _build_train_valid_test_datasets_kwargs(self):
@@ -164,7 +178,7 @@ class MegatronT5Model(MegatronLMEncoderDecoderModel):
                     f'<extra_id_{i}>' for i in range(tokenizer_cfg.get('num_sentinel_tokens', 0))
                 ]
             }
-            if dataset_type == "ul2":
+            if dataset_type in ["ul2", "ul2colt5"]:
                 mask_types = ['r', 's', 'x']
                 for mask_type in mask_types:
                     additional_tokens['additional_special_tokens'].extend([f'<extra_id_{mask_type}>'])
@@ -183,11 +197,15 @@ class MegatronT5Model(MegatronLMEncoderDecoderModel):
             else:
                 cls._add_base_special_tokens(tokenizer, is_huggingface_converted_model=False)
                 if tokenizer_cfg.get('num_sentinel_tokens', 0) > 0:
-                    cls._add_sentinel_tokens(
-                        tokenizer, tokenizer_cfg.num_sentinel_tokens, add_sentinel_tokens_in_reverse_order
-                    )
+                    cls._add_sentinel_tokens(tokenizer, tokenizer_cfg.num_sentinel_tokens, add_sentinel_tokens_in_reverse_order)
 
-            if dataset_type == "ul2":
+            if tokenizer_cfg.get('num_sentinel_tokens', 0) > 0 and len(tokenizer.additional_special_tokens_ids) == 0:
+                # fix until https://github.com/NVIDIA/NeMo/pull/6256 is merged
+                for i in range(tokenizer_cfg.get('num_sentinel_tokens', 0)):
+                    token = f'<extra_id_{i}>'
+                    tokenizer.special_token_to_id[token] = tokenizer.text_to_ids(f'<extra_id_{i}>')[-1]
+
+            if dataset_type in ["ul2", "ul2colt5"]:
                 for mask_type in ['r', 's', 'x']:
                     if len(tokenizer.text_to_ids(f'▁<extra_id_{mask_type}>')) == 1:
                         tokenizer.special_token_to_id[f'<extra_id_{mask_type}>'] = tokenizer.text_to_ids(
@@ -243,6 +261,16 @@ class MegatronT5Model(MegatronLMEncoderDecoderModel):
         logging.info(f'Length of val dataset: {len(self._validation_ds)}')
         logging.info(f'Length of test dataset: {len(self._test_ds)}')
         logging.info(f'Finished building {self.model_name} datasets.')
+
+        # sample = self._validation_ds.datasets[0].__getitem__(5)
+        # enc_t = self.tokenizer.ids_to_tokens(sample['text_enc'].tolist())
+        # print("\n", enc_t)
+        # print("LEN:", len([x for x in enc_t if "pad" not in x]))
+        # dec_t = self.tokenizer.ids_to_tokens(sample['text_dec'].tolist())
+        # print("\n", dec_t)
+        # print("LEN:", len([x for x in dec_t if "pad" not in x]))
+        # import pdb; pdb.set_trace()
+        # [print(k, " -- ", v) for k, v in self._validation_ds.datasets[0].__dict__.items() if "vocab" not in k]
         return self._train_ds, self._validation_ds, self._test_ds
 
     def list_available_models(self):

@@ -69,8 +69,9 @@ DSET_TYPE_T5 = 't5'
 DSET_TYPE_T5_LM = 't5_prefix_lm'
 DSET_TYPE_BART = 'bart'
 DSET_TYPE_UL2 = 'ul2'
+DSET_TYPE_UL2COLT5 = 'ul2colt5'
 
-DSET_TYPES = [DSET_TYPE_BERT, DSET_TYPE_ICT, DSET_TYPE_T5, DSET_TYPE_T5_LM, DSET_TYPE_BART, DSET_TYPE_UL2]
+DSET_TYPES = [DSET_TYPE_BERT, DSET_TYPE_ICT, DSET_TYPE_T5, DSET_TYPE_T5_LM, DSET_TYPE_BART, DSET_TYPE_UL2, DSET_TYPE_UL2COLT5]
 
 
 def compile_helper():
@@ -616,6 +617,7 @@ def get_dataset(
     from nemo.collections.nlp.data.language_modeling.megatron.length_distribution_type import LengthDistribution
     from nemo.collections.nlp.data.language_modeling.megatron.t5_dataset import T5Dataset
     from nemo.collections.nlp.data.language_modeling.megatron.ul2_dataset import UL2Dataset
+    from nemo.collections.nlp.data.language_modeling.megatron.ul2_colt5_dataset import UL2CoLT5Dataset
 
     if dataset_type == DSET_TYPE_ICT:
         raise NotImplementedError("ICT dataset is not implemented yet.")
@@ -698,7 +700,7 @@ def get_dataset(
             respect_document_boundaries=respect_document_boundaries,
             **kwargs,
         )
-    elif dataset_type == DSET_TYPE_UL2:
+    elif dataset_type in [DSET_TYPE_UL2, DSET_TYPE_UL2COLT5]:
         assert tokenizer is not None, "Tokenizer is required for UL2 dataset"
         documents = np.arange(start=start_index, stop=end_index, step=1, dtype=np.int32)
         logging.info("Instatiating UL2 Dataset ...")
@@ -720,7 +722,33 @@ def get_dataset(
         elif ngram_span_length_distribution == "geometric":
             ngram_span_length_distribution = LengthDistribution.geometric
 
-        dataset = UL2Dataset(
+        if dataset_type == DSET_TYPE_UL2:
+            dataset = UL2Dataset(
+                cfg=cfg,
+                trainer=trainer,
+                tokenizer=tokenizer,
+                indexed_dataset=indexed_dataset,
+                masked_lm_prob=masked_lm_prob,
+                max_seq_length_dec=max_seq_length_dec,
+                short_seq_prob=short_seq_prob,
+                max_ngram_size=max_ngram_size,
+                mean_ngram_size=mean_ngram_size,
+                ngram_span_length_distribution=ngram_span_length_distribution,
+                extreme_ngram_span_length_distribution=extreme_ngram_span_length_distribution,
+                permutation=permutation,
+                whole_word_masking=whole_word_masking,
+                favor_long_ngrams=favor_long_ngrams,
+                extreme_masked_lm_prob=cfg.data.get("extreme_masked_lm_prob", 0.5),
+                extreme_max_ngram_size=cfg.data.get("extreme_max_ngram_size", 128),
+                extreme_mean_ngram_size=cfg.data.get("extreme_mean_ngram_size", 64),
+                extreme_min_ngram_size=cfg.data.get("extreme_min_ngram_size", 32),
+                prefix_lm_pivot_mean=cfg.data.get("prefix_lm_pivot_mean", 0.25),
+                respect_document_boundaries=respect_document_boundaries,
+                documents=documents,
+                **kwargs,
+            )
+        else:
+            dataset = UL2CoLT5Dataset(
             cfg=cfg,
             trainer=trainer,
             tokenizer=tokenizer,
