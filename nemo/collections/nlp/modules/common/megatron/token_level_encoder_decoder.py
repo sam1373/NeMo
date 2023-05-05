@@ -221,7 +221,8 @@ class MegatronTokenLevelEncoderDecoderModule(MegatronModule):
                 global_tokens_spacing=encoder_cfg.get("global_tokens_spacing", 16),
                 global_attn_separate=encoder_cfg.get("global_attn_separate", True),
                 transient_global_tokens=encoder_cfg.get("transient_global_tokens", False),
-                global_token_mode=encoder_cfg.get("global_token_mode", "equal_spacing")
+                global_token_mode=encoder_cfg.get("global_token_mode", "equal_spacing"),
+                multi_query_attention=decoder_cfg.get('multi_query_attention', False),
             )
 
         if add_decoder:
@@ -342,6 +343,8 @@ class MegatronTokenLevelEncoderDecoderModule(MegatronModule):
                 moe_frequency=decoder_cfg.get('moe_frequency', 1),
                 moe_dropout=decoder_cfg.get('moe_dropout', 0.0),
                 position_embedding_type=decoder_cfg.get('position_embedding_type', 'learned_absolute'),
+                multi_query_attention=decoder_cfg.get('multi_query_attention', False),
+                multi_query_cross_attention=decoder_cfg.get('multi_query_cross_attention', False)
             )
 
         self.enc_dec_model = MegatronTransformerEncoderDecoderModule(

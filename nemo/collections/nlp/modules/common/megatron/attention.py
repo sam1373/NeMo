@@ -295,9 +295,14 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                 gradient_accumulation_fusion=gradient_accumulation_fusion,
             )
 
+            if self.multi_query_attention:
+                kv_proj = kv_channels * 2
+            else:
+                kv_proj = projection_size * 2
+
             self.key_value = tensor_parallel.ColumnParallelLinear(
                 hidden_size,
-                2 * projection_size,
+                kv_proj,
                 gather_output=False,
                 init_method=init_method,
                 bias=bias,
@@ -588,10 +593,16 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
             mixed_kv_layer, _ = self.key_value(encoder_output)
 
             # [sk, b, (np * 2 * hn)] --> [sk, b, np, 2 * hn]
-            new_tensor_shape = mixed_kv_layer.size()[:-1] + (
-                self.num_attention_heads_per_partition,
-                2 * self.hidden_size_per_attention_head,
-            )
+            if not self.multi_query_attention:
+                new_tensor_shape = mixed_kv_layer.size()[:-1] + (
+                    self.num_attention_heads_per_partition,
+                    2 * self.hidden_size_per_attention_head,
+                )
+            else:
+                new_tensor_shape = mixed_kv_layer.size()[:-1] + (
+                    1,
+                    2 * self.hidden_size_per_attention_head,
+                )
             if self.megatron_legacy:
                 mixed_kv_layer = self._transpose_last_dim(mixed_kv_layer, 2, True)
             mixed_kv_layer = mixed_kv_layer.view(*new_tensor_shape)
@@ -1023,8 +1034,8 @@ class CoreAttention(MegatronModule):
 
             # preallocting input tensor: [b * np, sq, sk]
             matmul_input_buffer = torch.empty(
-                output_size[0] * output_size[1],
-                output_size[2],
+                output_size[0],
+                output_size[2] * output_size[1],
                 output_size[3],
                 dtype=query_layer.dtype,
                 device=torch.cuda.current_device(),
@@ -1262,13 +1273,16 @@ class CoreAttention(MegatronModule):
             # [sk, b, np, hn] --> [b, np, sq, hn]
 
             # context layer shape: [b, np, sq, hn]
-            output_size = (value_layer.size(1), value_layer.size(2), query_layer.size(0), value_layer.size(3))
+            output_size = (value_layer.size(1), output_size[1], output_size[2], value_layer.size(3))
 
             # change view [sk, b * np, hn]
-            value_layer = value_layer.view(value_layer.size(0), output_size[0] * output_size[1], -1)
+            value_layer = value_layer.view(value_layer.size(0), value_layer.size(1) * value_layer.size(2), -1)
 
             # change view [b * np, sq, sk]
-            attention_probs = attention_probs.view(output_size[0] * output_size[1], output_size[2], -1)
+            if self.multi_query_attention:
+                attention_probs = attention_probs.view(output_size[0], output_size[2] * output_size[1], -1)
+            else:
+                attention_probs = attention_probs.view(output_size[0] * output_size[1], output_size[2], -1)
 
             # matmul: [b * np, sq, hn]
             context_layer = torch.bmm(attention_probs, value_layer.transpose(0, 1))

@@ -147,6 +147,7 @@ class ParallelTransformerLayer_(MegatronModule, adapter_mixins.AdapterModuleMixi
         transformer_block_type='pre_ln',
         position_embedding_type='learned_absolute',
         multi_query_attention=False,
+        multi_query_cross_attention=False,
         headscale=False,
         activations_checkpoint_granularity=None,
         sequence_parallel=False,
@@ -296,7 +297,7 @@ class ParallelTransformerLayer_(MegatronModule, adapter_mixins.AdapterModuleMixi
                 precision=precision,
                 apply_query_key_layer_scaling=apply_query_key_layer_scaling,
                 kv_channels=kv_channels,
-                multi_query_attention=multi_query_attention,
+                multi_query_attention=multi_query_attention or multi_query_cross_attention,
                 use_cpu_initialization=use_cpu_initialization,
                 masked_softmax_fusion=masked_softmax_fusion,
                 attention_dropout=attention_dropout,
@@ -657,6 +658,7 @@ class ParallelTransformerLayer(ParallelTransformerLayer_):
         transformer_block_type='pre_ln',
         position_embedding_type='learned_absolute',
         multi_query_attention=False,
+        multi_query_cross_attention=False,
         headscale=False,
         activations_checkpoint_granularity=None,
         sequence_parallel=False,
@@ -706,6 +708,7 @@ class ParallelTransformerLayer(ParallelTransformerLayer_):
             position_embedding_type=position_embedding_type,
             headscale=headscale,
             multi_query_attention=multi_query_attention,
+            multi_query_cross_attention=multi_query_cross_attention,
             activations_checkpoint_granularity=activations_checkpoint_granularity,
             sequence_parallel=sequence_parallel,
             gradient_accumulation_fusion=gradient_accumulation_fusion,
@@ -939,6 +942,7 @@ class ParallelTransformer(MegatronModule):
         use_emha=False,
         normalize_attention_scores=True,
         multi_query_attention=False,
+        multi_query_cross_attention=False,
         num_moe_experts=1,
         moe_frequency=1,
         moe_dropout=0.0,
@@ -1131,6 +1135,8 @@ class ParallelTransformer(MegatronModule):
                     global_attn_separate=global_attn_separate,
                     transient_global_tokens=transient_global_tokens,
                     global_token_mode=global_token_mode,
+                    multi_query_attention=multi_query_attention,
+                    multi_query_cross_attention=multi_query_cross_attention
                 )
 
         if parallel_state.get_virtual_pipeline_model_parallel_world_size() is not None:

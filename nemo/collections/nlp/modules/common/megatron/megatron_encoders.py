@@ -97,6 +97,7 @@ def get_encoder_model(
     global_attn_separate=True,
     transient_global_tokens=False,
     global_token_mode="equal_spacing",
+    multi_query_attention=False,
 ):
     """Build language model and return along with the key to save."""
 
@@ -161,6 +162,7 @@ def get_encoder_model(
             global_attn_separate=global_attn_separate,
             transient_global_tokens=transient_global_tokens,
             global_token_mode=global_token_mode,
+            multi_query_attention=multi_query_attention,
         )
     elif arch == "retro":
         encoder = MegatronRetrievalTransformerEncoderModule(
