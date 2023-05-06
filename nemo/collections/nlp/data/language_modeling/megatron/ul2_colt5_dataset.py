@@ -39,10 +39,7 @@ class UL2CoLT5Dataset(UL2Dataset):
         # python randint is inclusive whereas the numpy one is exclusive.
         np_rng = np.random.RandomState(seed=(self.seed + idx))
         masking_type = np_rng.randint(0, 4)
-        # masking_type = 0
-        # print(f"Masking type: {masking_type}")
-        # print(self.tokenizer.ids_to_tokens(sample[0].tolist()))
-        # print("#" * 100)
+
         if masking_type == 0:
             # Call T5's build training sample for regular short span masking.
             max_ngram_size = 7
@@ -69,9 +66,9 @@ class UL2CoLT5Dataset(UL2Dataset):
             )
         elif masking_type == 1:
             # Call T5's build training sample for regular short span masking.
-            max_ngram_size = 10
-            mean_ngram_size = 8
-            favor_long_ngrams = True
+            max_ngram_size = 20
+            mean_ngram_size = 9
+            favor_long_ngrams = False
             return UL2Dataset.get_r_masking_training_sample(
                 sample=sample,
                 tokenizer=self.tokenizer,
@@ -93,11 +90,7 @@ class UL2CoLT5Dataset(UL2Dataset):
                 skip_masking_id=None,
             )
         elif masking_type == 2:
-            # Call T5's build training sample for regular short span masking.
-            max_ngram_size = 80
-            mean_ngram_size = 64
-            favor_long_ngrams = True
-            return UL2Dataset.get_r_masking_training_sample(
+            return UL2Dataset.get_x_masking_training_sample(
                 sample=sample,
                 tokenizer=self.tokenizer,
                 np_rng=np_rng,
@@ -105,17 +98,17 @@ class UL2CoLT5Dataset(UL2Dataset):
                 max_seq_length=self.max_seq_length,
                 max_seq_length_dec=self.max_seq_length_dec,
                 masked_lm_prob=self.masked_lm_prob,
-                vocab_id_list=self.vocab_id_list,
-                vocab_id_to_token_dict=self.vocab_id_to_token_dict,
-                max_ngram_size=max_ngram_size,
-                mean_ngram_size=mean_ngram_size,
-                whole_word_masking=self.whole_word_masking,
-                favor_long_ngrams=favor_long_ngrams,
-                permutation=self.permutation,
-                geometric_dist=self.geometric_dist,
-                tokenizer_type=self.tokenizer_type,
+                extreme_masked_lm_prob=self.extreme_masked_lm_prob,
+                max_ngram_size=self.max_ngram_size,
+                min_ngram_size=self.min_ngram_size,
+                mean_ngram_size=self.mean_ngram_size,
+                extreme_max_ngram_size=self.extreme_max_ngram_size,
+                extreme_min_ngram_size=self.extreme_min_ngram_size,
+                extreme_mean_ngram_size=self.extreme_mean_ngram_size,
+                extreme_ngram_span_length_distribution=self.extreme_ngram_span_length_distribution,
                 sentinel_tokens=self.sentinel_tokens,
                 skip_masking_id=None,
+                task_type=0,
             )
         else:
             return UL2Dataset.get_s_masking_training_sample(

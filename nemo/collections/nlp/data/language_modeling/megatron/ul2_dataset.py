@@ -224,10 +224,6 @@ class UL2Dataset(T5Dataset):
         # python randint is inclusive whereas the numpy one is exclusive.
         np_rng = np.random.RandomState(seed=(self.seed + idx))
         masking_type = np_rng.randint(0, 3)  # 0: short span masking, 1: extreme masking, 2: prefix-LM
-        masking_type = 0
-        print(f"Masking type: {masking_type}")
-        print(self.tokenizer.ids_to_tokens(sample[0].tolist()))
-        print("#" * 100)
         if masking_type == 0:
             # Call T5's build training sample for regular short span masking.
             return UL2Dataset.get_r_masking_training_sample(
@@ -315,6 +311,7 @@ class UL2Dataset(T5Dataset):
         eos_id,
         pad_id,
         skip_masking_id=None,
+        task_type: int=None
     ):
         """Build training sample.
         Arguments:
@@ -343,6 +340,7 @@ class UL2Dataset(T5Dataset):
             whole_word_masking: Always masks entire words instead of individual sub-word tokens.
             favor_long_ngrams: Favor longer ngrams over shorter ones.
             skip_masking_id: id of the token to that will never be masked.
+            task_type: 0 = extreme masking, 1 = extreme masking, 2 = extreme masking, None - to choose randomly between the three.
         """
         assert target_seq_length <= max_seq_length
 
@@ -357,8 +355,8 @@ class UL2Dataset(T5Dataset):
         # 1. Small masking prob, large spans.
         # 2. Large masking prob, small spans.
         # 3. Large masking prob, large spans.
-        task_type = np_rng.randint(0, 3)
-        task_type = 2
+        if task_type is None:
+            task_type = np_rng.randint(0, 3)
         if task_type == 0:
             # Large spans, small masking prob
             max_ngram_size, mean_ngram_size, min_ngram_size, masked_lm_prob = (
