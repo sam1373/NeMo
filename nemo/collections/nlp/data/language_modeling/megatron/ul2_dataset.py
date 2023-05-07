@@ -191,6 +191,7 @@ class UL2Dataset(T5Dataset):
         extreme_ngram_span_length_distribution: LengthDistribution,
         sentinel_tokens: list,
         skip_masking_id: int,
+        task_type: int=None,
     ):
         sample = UL2Dataset.build_extreme_masking_training_sample(
             sample=sample,
@@ -213,6 +214,7 @@ class UL2Dataset(T5Dataset):
             eos_id=tokenizer.eos_id,
             pad_id=tokenizer.pad_id,
             skip_masking_id=skip_masking_id,
+            task_type=task_type,
         )
         sample = UL2Dataset._prepend_mask_type_token(tokenizer, sample, '<extra_id_x>')
         return sample
