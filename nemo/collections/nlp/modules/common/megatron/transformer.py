@@ -1136,7 +1136,7 @@ class ParallelTransformer(MegatronModule):
                     transient_global_tokens=transient_global_tokens,
                     global_token_mode=global_token_mode,
                     multi_query_attention=multi_query_attention,
-                    multi_query_cross_attention=multi_query_cross_attention
+                    multi_query_cross_attention=multi_query_cross_attention,
                 )
 
         if parallel_state.get_virtual_pipeline_model_parallel_world_size() is not None:

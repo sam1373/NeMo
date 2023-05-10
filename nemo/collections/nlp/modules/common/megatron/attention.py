@@ -221,7 +221,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         global_tokens=1024,
         global_tokens_spacing=16,
         global_attn_separate=True,
-        transient_global_tokens=False,#tmp
+        transient_global_tokens=False,  # tmp
         global_token_mode="equal_spacing",
     ):
         super(ParallelAttention, self).__init__()
@@ -334,7 +334,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
             global_tokens=global_tokens,
             global_tokens_spacing=global_tokens_spacing,
             global_attn_separate=False,
-            transient_global_tokens=self.transient_global_tokens,
+            transient_global_tokens=self.global_token_mode == "transient",
         )
 
         # Output.
@@ -536,28 +536,44 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
             total_transient_tokens = 0
 
             if self.global_token_mode == "equal_spacing":
-                side_bias_idx = torch.arange(0, hidden_states.shape[0], self.global_tokens_spacing, device=hidden_states.device)
+                side_bias_idx = torch.arange(
+                    0, hidden_states.shape[0], self.global_tokens_spacing, device=hidden_states.device
+                )
             elif self.global_token_mode == "start_and_equal_spacing":
                 side_bias_idx = torch.arange(self.global_tokens, device=hidden_states.device)
-                side_bias_idx = torch.cat((side_bias_idx,
-                                           torch.arange(self.global_tokens, hidden_states.shape[0], self.global_tokens_spacing, device=hidden_states.device)),
-                                          dim=0)
+                side_bias_idx = torch.cat(
+                    (
+                        side_bias_idx,
+                        torch.arange(
+                            self.global_tokens,
+                            hidden_states.shape[0],
+                            self.global_tokens_spacing,
+                            device=hidden_states.device,
+                        ),
+                    ),
+                    dim=0,
+                )
             elif self.global_token_mode == "random_spacing":
                 random_spacing = torch.randint(self.global_tokens_spacing, self.global_tokens_spacing * 2, (1,)).item()
                 side_bias_idx = torch.arange(0, hidden_states.shape[0], random_spacing, device=hidden_states.device)
             elif self.global_token_mode == "equal_spacing_random_offset":
-                side_bias_idx = torch.arange(0, hidden_states.shape[0], self.global_tokens_spacing, device=hidden_states.device)
-                random_offset = torch.randint(0, self.global_tokens_spacing, side_bias_idx.shape, device=hidden_states.device)
+                side_bias_idx = torch.arange(
+                    0, hidden_states.shape[0], self.global_tokens_spacing, device=hidden_states.device
+                )
+                random_offset = torch.randint(
+                    0, self.global_tokens_spacing, side_bias_idx.shape, device=hidden_states.device
+                )
                 side_bias_idx += random_offset
                 side_bias_idx = torch.clamp(side_bias_idx, max=hidden_states.shape[0] - 1)
             elif self.global_token_mode == "random":
-                side_bias_idx = torch.randperm(hidden_states.shape[0], device=hidden_states.device)[:self.global_tokens]
+                side_bias_idx = torch.randperm(hidden_states.shape[0], device=hidden_states.device)[
+                    : self.global_tokens
+                ]
             else:
                 side_bias_idx = None
 
             if side_bias_idx is not None:
                 side_bias_idx = side_bias_idx[None, :].expand(hidden_states.shape[1], -1)
-
 
         global_query_layer = global_key_layer = global_value_layer = None
         if self.attention_type == AttnType.self_attn:
@@ -599,10 +615,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                     2 * self.hidden_size_per_attention_head,
                 )
             else:
-                new_tensor_shape = mixed_kv_layer.size()[:-1] + (
-                    1,
-                    2 * self.hidden_size_per_attention_head,
-                )
+                new_tensor_shape = mixed_kv_layer.size()[:-1] + (1, 2 * self.hidden_size_per_attention_head,)
             if self.megatron_legacy:
                 mixed_kv_layer = self._transpose_last_dim(mixed_kv_layer, 2, True)
             mixed_kv_layer = mixed_kv_layer.view(*new_tensor_shape)
@@ -1107,8 +1120,20 @@ class CoreAttention(MegatronModule):
                         key_layer = key_layer[total_transient_tokens:]
                         value_layer = value_layer[total_transient_tokens:]
                     else:
-                        side_k = torch.gather(key_layer.transpose(0, 1), dim=1, index=side_bias_idx[..., None, None].expand(-1, -1, key_layer.shape[-2], key_layer.shape[-1]))
-                        side_v = torch.gather(value_layer.transpose(0, 1), dim=1, index=side_bias_idx[..., None, None].expand(-1, -1, value_layer.shape[-2], value_layer.shape[-1]))
+                        side_k = torch.gather(
+                            key_layer.transpose(0, 1),
+                            dim=1,
+                            index=side_bias_idx[..., None, None].expand(
+                                -1, -1, key_layer.shape[-2], key_layer.shape[-1]
+                            ),
+                        )
+                        side_v = torch.gather(
+                            value_layer.transpose(0, 1),
+                            dim=1,
+                            index=side_bias_idx[..., None, None].expand(
+                                -1, -1, value_layer.shape[-2], value_layer.shape[-1]
+                            ),
+                        )
 
                         side_k = side_k.transpose(1, 2)
                         side_v = side_v.transpose(1, 2)
@@ -1176,26 +1201,39 @@ class CoreAttention(MegatronModule):
                 attention_scores[..., : self.local_context * 3] += local_attention_mask
 
                 if relative_position_bias is not None:
-                    pos_bias = self.get_local_pos_bias(
-                        relative_position_bias, attention_scores.shape[2], self.local_context
-                    )
+                    if isinstance(relative_position_bias, torch.Tensor):
 
-                    if side_bias_idx is not None:
-                        side_pos_bias = self.get_side_pos_bias(
-                            relative_position_bias, attention_scores.shape[2], self.local_context, side_bias_idx
+                        attention_scores[
+                            :,
+                            self.num_attention_heads_partition_offset : self.num_attention_heads_partition_offset
+                            + self.num_attention_heads_per_partition,
+                        ] += relative_position_bias[
+                            self.num_attention_heads_partition_offset : self.num_attention_heads_partition_offset
+                            + self.num_attention_heads_per_partition
+                        ]
+
+                    else:
+
+                        pos_bias = self.get_local_pos_bias(
+                            relative_position_bias, attention_scores.shape[2], self.local_context
                         )
-                        pos_bias = pos_bias.expand(*side_pos_bias.shape[:-1], -1)
-                        pos_bias = torch.cat((pos_bias, side_pos_bias), dim=-1)
 
-                    attention_scores[
-                        :,
-                        self.num_attention_heads_partition_offset : self.num_attention_heads_partition_offset
-                        + self.num_attention_heads_per_partition,
-                    ] += pos_bias[
-                        :,
-                        self.num_attention_heads_partition_offset : self.num_attention_heads_partition_offset
-                        + self.num_attention_heads_per_partition,
-                    ]
+                        if side_bias_idx is not None:
+                            side_pos_bias = self.get_side_pos_bias(
+                                relative_position_bias, attention_scores.shape[2], self.local_context, side_bias_idx
+                            )
+                            pos_bias = pos_bias.expand(*side_pos_bias.shape[:-1], -1)
+                            pos_bias = torch.cat((pos_bias, side_pos_bias), dim=-1)
+
+                        attention_scores[
+                            :,
+                            self.num_attention_heads_partition_offset : self.num_attention_heads_partition_offset
+                            + self.num_attention_heads_per_partition,
+                        ] += pos_bias[
+                            :,
+                            self.num_attention_heads_partition_offset : self.num_attention_heads_partition_offset
+                            + self.num_attention_heads_per_partition,
+                        ]
 
                 attention_probs = F.softmax(attention_scores, dim=-1)
                 # attention_probs = self.scale_mask_softmax(attention_scores, None)

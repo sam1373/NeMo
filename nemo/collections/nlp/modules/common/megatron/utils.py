@@ -318,6 +318,51 @@ def build_attention_mask_3d(source_mask, target_mask, attn_mask_type):
     return mask
 
 
+def build_rel_pos_long_attention(seq_length, global_token_mode, global_tokens_spacing, local_context, global_tokens):
+
+    side_bias_idx = None
+
+    device = torch.cuda.current_device()
+
+    pad_len = -seq_length % local_context
+    num_blocks = (seq_length + pad_len) // local_context
+
+    if global_token_mode == "transient":
+        side_bias_idx = torch.arange(
+            global_tokens_spacing // 2, global_tokens_spacing // 2 + seq_length, global_tokens_spacing, device=device,
+        )
+    elif global_token_mode != "local_only":
+
+        if global_token_mode == "start_and_equal_spacing":
+            side_bias_idx = torch.arange(global_tokens, device=device)
+            side_bias_idx = torch.cat(
+                (side_bias_idx, torch.arange(global_tokens, seq_length, global_tokens_spacing, device=device)), dim=0
+            )
+        else:
+            side_bias_idx = torch.arange(0, seq_length, global_tokens_spacing, device=device)
+
+    memory_position = torch.arange(3 * local_context, dtype=torch.long, device=device)
+    context_position = memory_position[local_context:-local_context]
+    relative_position = memory_position[None, :] - context_position[:, None]
+    relative_position = relative_position[None, :].expand(num_blocks, -1, -1)
+
+    if side_bias_idx is not None:
+
+        context_position = torch.arange(seq_length + pad_len, device=side_bias_idx.device)
+
+        # time, side
+        relative_position_side = side_bias_idx[None, :] - context_position[:, None]
+
+        relative_position_side = relative_position_side.reshape(num_blocks, local_context, -1)
+
+        relative_position = torch.cat((relative_position, relative_position_side), dim=-1)
+
+        # if side_bias_idx is not None:
+        #    side_bias_idx = side_bias_idx[None, :].expand(hidden_states.shape[1], -1)
+
+    return relative_position
+
+
 def get_params_for_weight_decay_optimization(
     model: Union[torch.nn.Module, List[torch.nn.Module]],
 ) -> Dict[str, torch.nn.Parameter]:

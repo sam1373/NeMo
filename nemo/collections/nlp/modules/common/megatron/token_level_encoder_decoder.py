@@ -33,6 +33,7 @@ from nemo.collections.nlp.modules.common.megatron.utils import (
     init_method_normal,
     parallel_lm_logits,
     scaled_init_method_normal,
+    build_rel_pos_long_attention,
 )
 from nemo.collections.nlp.modules.common.megatron.vocab_parallel_cross_entropy import vocab_parallel_cross_entropy
 
@@ -126,6 +127,15 @@ class MegatronTokenLevelEncoderDecoderModule(MegatronModule):
         self.share_token_embeddings = share_token_embeddings
         self.share_decoder_tokens_head_embeddings = share_decoder_tokens_head_embeddings
         self.tokens_head_bias = tokens_head_bias
+
+        # for now always true
+        self.pre_compute_pos_bias = True
+        self.local_context = encoder_cfg.get("local_context", 128)
+        self.global_tokens = encoder_cfg.get("global_tokens", 512)
+        self.global_tokens_spacing = encoder_cfg.get("global_tokens_spacing", 16)
+        self.global_token_mode = encoder_cfg.get("global_token_mode", "equal_spacing")
+        if encoder_cfg.get("transient_global_tokens", False):
+            self.global_token_mode = "transient"
 
         encoder_kv_channels, decoder_kv_channels = self._validate_config()
 
@@ -344,7 +354,7 @@ class MegatronTokenLevelEncoderDecoderModule(MegatronModule):
                 moe_dropout=decoder_cfg.get('moe_dropout', 0.0),
                 position_embedding_type=decoder_cfg.get('position_embedding_type', 'learned_absolute'),
                 multi_query_attention=decoder_cfg.get('multi_query_attention', False),
-                multi_query_cross_attention=decoder_cfg.get('multi_query_cross_attention', False)
+                multi_query_cross_attention=decoder_cfg.get('multi_query_cross_attention', False),
             )
 
         self.enc_dec_model = MegatronTransformerEncoderDecoderModule(
@@ -504,7 +514,20 @@ class MegatronTokenLevelEncoderDecoderModule(MegatronModule):
                     query_seq_length=enc_seq_length, key_seq_length=enc_seq_length,
                 )
             else:
-                encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding
+                if self.pre_compute_pos_bias:
+                    relative_position = build_rel_pos_long_attention(
+                        seq_length=enc_seq_length,
+                        global_token_mode=self.global_token_mode,
+                        global_tokens_spacing=self.global_tokens_spacing,
+                        local_context=self.local_context,
+                        global_tokens=self.global_tokens,
+                    )
+                    encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding.get_bias(
+                        relative_position
+                    ).transpose(0, 1)
+                    # head, block, context, hidden
+                else:
+                    encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding
 
         if output_enc_hidden_only:
             # When pipeline parallel > 1 we need to make sure encoder exist (will be missing in decoder)
