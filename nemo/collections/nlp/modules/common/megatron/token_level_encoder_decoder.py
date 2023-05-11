@@ -159,7 +159,7 @@ class MegatronTokenLevelEncoderDecoderModule(MegatronModule):
                     num_attention_heads=encoder_cfg.num_attention_heads,
                     relative_position_num_buckets=encoder_cfg.relative_attention_num_buckets,
                     relative_position_max_distance=encoder_cfg.relative_attention_max_distance,
-                    bidirectional=True,
+                    bidirectional=encoder_cfg.get('relative_attention_pos_emb_bidirectional', True),
                     layer_type=LayerType.encoder,
                 )
                 self._encoder_relative_position_embedding_key = "encoder_relative_position_embedding"
