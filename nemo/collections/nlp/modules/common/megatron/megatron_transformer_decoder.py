@@ -87,6 +87,8 @@ class MegatronTransformerDecoderModule(MegatronModule, Exportable, MegatronDecod
         position_embedding_type='learned_absolute',
         multi_query_attention=False,
         multi_query_cross_attention=False,
+        use_flash_attention=False,
+        use_flash_cross_attention=False,
     ):
         super(MegatronTransformerDecoderModule, self).__init__()
 
@@ -153,6 +155,8 @@ class MegatronTransformerDecoderModule(MegatronModule, Exportable, MegatronDecod
             position_embedding_type=position_embedding_type,
             multi_query_attention=multi_query_attention,
             multi_query_cross_attention=multi_query_cross_attention,
+            use_flash_attention=use_flash_attention,
+            use_flash_cross_attention=use_flash_cross_attention,
         )
         self._model_key = 'model'
 

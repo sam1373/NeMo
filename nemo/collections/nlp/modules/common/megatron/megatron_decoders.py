@@ -90,6 +90,8 @@ def get_decoder_model(
     position_embedding_type='learned_absolute',
     multi_query_attention=False,
     multi_query_cross_attention=False,
+    use_flash_attention=False,
+    use_flash_cross_attention=False,
 ):
     """Build language model and return along with the key to save."""
 
@@ -149,6 +151,8 @@ def get_decoder_model(
             position_embedding_type=position_embedding_type,
             multi_query_attention=multi_query_attention,
             multi_query_cross_attention=multi_query_cross_attention,
+            use_flash_attention=use_flash_attention,
+            use_flash_cross_attention=use_flash_cross_attention,
         )
     elif arch == "retro":
         decoder = MegatronRetrievalTransformerDecoderModule(

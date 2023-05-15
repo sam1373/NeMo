@@ -162,6 +162,8 @@ class ParallelTransformerLayer_(MegatronModule, adapter_mixins.AdapterModuleMixi
         global_attn_separate=True,
         transient_global_tokens=False,
         global_token_mode="equal_spacing",
+        use_flash_attention=False,
+        use_flash_cross_attention=False,
     ):
         super(ParallelTransformerLayer_, self).__init__()
 
@@ -242,6 +244,7 @@ class ParallelTransformerLayer_(MegatronModule, adapter_mixins.AdapterModuleMixi
                 global_attn_separate=global_attn_separate,
                 transient_global_tokens=transient_global_tokens,
                 global_token_mode=global_token_mode,
+                use_flash_attention=use_flash_attention,
             )
 
             if transformer_block_type == 'normformer':
@@ -307,6 +310,7 @@ class ParallelTransformerLayer_(MegatronModule, adapter_mixins.AdapterModuleMixi
                 sequence_parallel=sequence_parallel,
                 gradient_accumulation_fusion=gradient_accumulation_fusion,
                 normalize_attention_scores=normalize_attention_scores,
+                use_flash_attention=use_flash_attention or use_flash_cross_attention,
             )
             # Normformer normalization
             if transformer_block_type == 'normformer':
@@ -674,6 +678,8 @@ class ParallelTransformerLayer(ParallelTransformerLayer_):
         global_attn_separate=True,
         transient_global_tokens=False,
         global_token_mode="equal_spacing",
+        use_flash_attention=False,
+        use_flash_cross_attention=False,
     ):
         super(ParallelTransformerLayer, self).__init__(
             init_method=init_method,
@@ -723,6 +729,8 @@ class ParallelTransformerLayer(ParallelTransformerLayer_):
             global_attn_separate=global_attn_separate,
             transient_global_tokens=transient_global_tokens,
             global_token_mode=global_token_mode,
+            use_flash_attention=use_flash_attention,
+            use_flash_cross_attention=use_flash_cross_attention,
         )
 
         if precision == 'bf16':
@@ -953,6 +961,8 @@ class ParallelTransformer(MegatronModule):
         global_attn_separate=True,
         transient_global_tokens=False,
         global_token_mode="equal_spacing",
+        use_flash_attention=False,
+        use_flash_cross_attention=False,
     ):
         super(ParallelTransformer, self).__init__()
 
@@ -1137,6 +1147,8 @@ class ParallelTransformer(MegatronModule):
                     global_token_mode=global_token_mode,
                     multi_query_attention=multi_query_attention,
                     multi_query_cross_attention=multi_query_cross_attention,
+                    use_flash_attention=use_flash_attention,
+                    use_flash_cross_attention=use_flash_cross_attention,
                 )
 
         if parallel_state.get_virtual_pipeline_model_parallel_world_size() is not None:

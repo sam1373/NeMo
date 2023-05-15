@@ -232,7 +232,8 @@ class MegatronTokenLevelEncoderDecoderModule(MegatronModule):
                 global_attn_separate=encoder_cfg.get("global_attn_separate", True),
                 transient_global_tokens=encoder_cfg.get("transient_global_tokens", False),
                 global_token_mode=encoder_cfg.get("global_token_mode", "equal_spacing"),
-                multi_query_attention=decoder_cfg.get('multi_query_attention', False),
+                multi_query_attention=encoder_cfg.get('multi_query_attention', False),
+                use_flash_attention=encoder_cfg.get('use_flash_attention', False),
             )
 
         if add_decoder:
@@ -355,6 +356,8 @@ class MegatronTokenLevelEncoderDecoderModule(MegatronModule):
                 position_embedding_type=decoder_cfg.get('position_embedding_type', 'learned_absolute'),
                 multi_query_attention=decoder_cfg.get('multi_query_attention', False),
                 multi_query_cross_attention=decoder_cfg.get('multi_query_cross_attention', False),
+                use_flash_attention=decoder_cfg.get('use_flash_attention', False),
+                use_flash_cross_attention=decoder_cfg.get('use_flash_cross_attention', False),
             )
 
         self.enc_dec_model = MegatronTransformerEncoderDecoderModule(
@@ -524,7 +527,7 @@ class MegatronTokenLevelEncoderDecoderModule(MegatronModule):
                     )
                     encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding.get_bias(
                         relative_position
-                    ).transpose(0, 1)
+                    ).transpose(0, 1)[None]
                     # head, block, context, hidden
                 else:
                     encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding
