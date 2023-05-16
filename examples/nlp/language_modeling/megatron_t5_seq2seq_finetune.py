@@ -74,6 +74,9 @@ def _modify_config(t5_cfg, cfg, add_cfg_to_tree=False):
             if hasattr(cfg.model, 'position_embedding_type'):
                 t5_cfg.encoder.position_embedding_type = cfg.model.position_embedding_type
                 t5_cfg.decoder.position_embedding_type = cfg.model.position_embedding_type
+            if hasattr(cfg.model, 'use_flash_attention'):
+                t5_cfg.encoder.use_flash_attention = cfg.model.use_flash_attention
+                t5_cfg.decoder.use_flash_attention = cfg.model.use_flash_attention
         else:
             t5_cfg.hidden_dropout = cfg.model.get('hidden_dropout', 0.1)
             t5_cfg.attention_dropout = cfg.model.get('attention_dropout', 0.1)

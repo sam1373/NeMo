@@ -15,7 +15,7 @@
 """Utilities for models."""
 
 import math
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Tuple, Union, Iterator
 
 import torch
 
@@ -401,3 +401,17 @@ def get_all_params_for_weight_decay_optimization(
     ]
 
     return ({'params': weight_decay_params},)
+
+def get_iterator_k_split(batch: List[torch.Tensor], num_microbatches: int) -> Iterator:
+    if isinstance(batch, dict):
+        items = list(batch.items())
+        assert items[0][1].shape[0] % num_microbatches == 0, "Issue with batch size configuration!"
+        split_batch = [torch.tensor_split(item[1], num_microbatches, dim=0) for item in items]
+        microbatches = [[(items[i][0], split_batch[i][j]) for i in range(len(items))] for j in range(num_microbatches)]
+        microbatches = [dict(elem) for elem in microbatches]
+    else:
+        assert batch[0].shape[0] % num_microbatches == 0, "Issue with batch size configuration!"
+        split_batch = [torch.tensor_split(item, num_microbatches, dim=0) for item in batch]
+        microbatches = [[elem[i] for elem in split_batch] for i in range(num_microbatches)]
+
+    return itertools.chain(microbatches)
