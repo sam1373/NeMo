@@ -53,6 +53,8 @@ def _modify_config(t5_cfg, cfg, add_cfg_to_tree=False):
             t5_cfg.decoder.masked_softmax_fusion = False
             t5_cfg.encoder.hidden_dropout = cfg.model.get('hidden_dropout', 0.1)
             t5_cfg.decoder.hidden_dropout = cfg.model.get('hidden_dropout', 0.1)
+            t5_cfg.encoder.attention_dropout = cfg.model.get('attention_dropout', 0.1)
+            t5_cfg.decoder.attention_dropout = cfg.model.get('attention_dropout', 0.1)
             if hasattr(t5_cfg.encoder, 'ffn_dropout'):
                 t5_cfg.encoder.ffn_dropout = cfg.model.get('ffn_dropout', 0.1)
             if hasattr(t5_cfg.decoder, 'ffn_dropout'):

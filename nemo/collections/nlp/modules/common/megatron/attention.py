@@ -1197,9 +1197,9 @@ class CoreAttention(MegatronModule):
         
         if self.use_long_attention:
             assert sq == sk, 'Long Attention can only use for self-attention.'
-            nb = sq // self.local_context
+            nb = (sq + self.local_context - 1) // self.local_context
             context_layer = rearrange(context_layer, '(b nb) np sq hn -> b np (nb sq) hn', nb=nb)
-            context_layer = context_layer[:, :, :nb * self.local_context]
+            context_layer = context_layer[:, :, :sq]
             
 
         if headscale_tensor is not None:
