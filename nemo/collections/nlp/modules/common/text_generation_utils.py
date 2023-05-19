@@ -599,18 +599,21 @@ def sample_sequence_batch(
         maxlen = inference_strategy.clip_max_len(maxlen)
 
         lengths = torch.ones([batch_size]).long().cuda() * maxlen
+        RUN=0
         while context_length < maxlen:
             batch, tensor_shape = inference_strategy.prepare_batch_at_step(
                 tokens, maxlen, micro_batch_size, counter, context_length
             )
-
+            print("RUN: ", RUN)
+            RUN+=1
+            print(f"context_length: {context_length}")
             output = inference_strategy.forward_step(batch, tensor_shape)
-
+            
             if parallel_state.is_pipeline_last_stage():
-                output = output[0]['logits'].float()
+                output = output[0]['logits'] #.float()
                 output = tensor_parallel.gather_from_tensor_model_parallel_region(output)
                 assert output is not None
-                output = output.float()
+                output = output #.float()
                 logits = output[:, -1].view(batch_size, -1).contiguous()
 
                 # make sure it will generate at least min_length
@@ -646,9 +649,11 @@ def sample_sequence_batch(
 
                 # Insert either new predicted or next prompt token
                 tokens[:, context_length] = new_tokens
-
+                
                 if output_logits is None:
+                    print(f"before log_softmax: {round(torch.cuda.memory_allocated(0)/(1024**3))}")
                     output = F.log_softmax(output[:, :context_length, :], 2)
+                    print(f"after log_softmax: {round(torch.cuda.memory_allocated(0)/(1024**3))}")
                     indices = torch.unsqueeze(tokens[:, 1 : context_length + 1], 2)
                     output_logits = torch.gather(output, 2, indices).squeeze(2)
                     all_generated_indices = indices[:, :, 0]

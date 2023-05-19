@@ -214,7 +214,7 @@ class GPTSFTDataset(Dataset):
             'context_ids': context_ids,
             'context_length': len(context_ids),
         }
-        print("-->input_ids: ", len(input_ids), "context len: ", len(context.split()))
+        print("-->input_ids: ", len(input_ids), "original context len in tokens: ", len(self.tokenizer.text_to_ids(context)))
         return processed_example
 
     def _maybe_cast_to_list(self, x):

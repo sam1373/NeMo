@@ -82,7 +82,7 @@ except (ImportError, ModuleNotFoundError):
     tensor of the same size. We use the following arguments:
         hyperparameters: transformer hyperparameters
 """
-
+ID_FA=0
 
 def _pad_to_multiple(x: torch.Tensor, block_len: int, dim: int, pad_value: int = 0) -> torch.Tensor:
     """Pad a tensor so that a sequence length will be a multiple of `block_len`"""
@@ -1021,6 +1021,7 @@ class CoreAttention(MegatronModule):
         total_transient_tokens=0,
         side_bias_idx=None,
     ):
+        # print(f"self.position_embedding_type: {self.position_embedding_type}")
         b, np, sq, sk, hn = (
             query_layer.size(1),
             query_layer.size(2),
@@ -1369,7 +1370,15 @@ class CoreAttention(MegatronModule):
         context_layer = pad_input(context_layer, indices_q, batch_size, seqlen)
         
         # [b, sq, np, hn] -> [b, np, sq, hn]
-        context_layer = context_layer.permute(0, 2, 1, 3)  
+        context_layer = context_layer.permute(0, 2, 1, 3)
+        global ID_FA
+        print(f'flash_attention {ID_FA}, {round(torch.cuda.memory_allocated(0)/(1024**3))}')
+        # print shapr of query_layer, key_layer, value_layer, attention_mask
+        print(f'query_layer: {query_layer.shape}')
+        print(f'key_layer: {key_layer.shape}')
+        print(f'value_layer: {value_layer.shape}')
+        print("=" * 40)
+        ID_FA += 1  
         return context_layer
 
     def flash_attention_triton(self, query_layer, key_layer, value_layer, attention_mask, attention_bias):

@@ -290,8 +290,10 @@ class Float16Module(MegatronModule):
         if getattr(self.module, 'pre_process', True):
             inputs = fp32_to_float16(inputs, self.float16_converter)
         outputs = self.module(*inputs, **kwargs)
-        if parallel_state.is_pipeline_last_stage():
-            outputs = float16_to_fp32(outputs)
+        print("in /media/ebakhturina/llm/nemo_sam/NeMo/nemo/collections/nlp/modules/common/megatron/module.py line 293:", round(torch.cuda.memory_allocated(0)/(1024**3)))
+        # if parallel_state.is_pipeline_last_stage():
+        #     outputs = float16_to_fp32(outputs)
+        print("in /media/ebakhturina/llm/nemo_sam/NeMo/nemo/collections/nlp/modules/common/megatron/module.py line 293:", round(torch.cuda.memory_allocated(0)/(1024**3)))
         return outputs
 
     def state_dict(self, destination=None, prefix='', keep_vars=False):
