@@ -365,6 +365,9 @@ class T5Dataset(Dataset):
         (start_index, end_index) = (0, None)
         if masked_spans is not None:
             for span in masked_spans:
+                # to make sure that we don't exceed the max_seq_length_dec, +2 for eos + sentinel_token
+                if len(t5_decoder_in) + len(span.label) + 2 > max_seq_length_dec:
+                    break
                 flag = sentinel_tokens.popleft()
 
                 # Append the same tokens in decoder input and output
