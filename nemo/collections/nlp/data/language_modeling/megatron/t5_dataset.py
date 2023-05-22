@@ -292,7 +292,7 @@ class T5Dataset(Dataset):
         tokens = tokens[:max_num_tokens]
 
         # Masking.
-        max_predictions_per_seq = masked_lm_prob * max_num_tokens
+        max_predictions_per_seq = min(masked_lm_prob * max_num_tokens, max_seq_length_dec)
         lm_pred = create_masked_lm_predictions(
             tokens=tokens,
             vocab_id_list=vocab_id_list,
