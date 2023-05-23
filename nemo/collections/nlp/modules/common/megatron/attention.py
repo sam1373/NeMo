@@ -1023,6 +1023,8 @@ class CoreAttention(MegatronModule):
 
         if self.global_attn_separate and relative_position_bias is not None:
             relative_position_bias, relative_position_bias_global = relative_position_bias
+        else:
+            relative_position_bias_global = None
 
         # ==================================================
         # Update attention mask for inference. [b, np, sq, sk]
@@ -1265,7 +1267,8 @@ class CoreAttention(MegatronModule):
             attention_mask = local_attention_mask
 
         if attention_bias is None:
-            attention_bias = torch.where(attention_mask, 0.0, -1e10)
+            if not self.use_flash_attention:
+                attention_bias = torch.where(attention_mask, 0.0, -1e10)
         else:
             attention_bias = attention_bias + torch.where(attention_mask, 0.0, -1e10)
 
@@ -1273,7 +1276,8 @@ class CoreAttention(MegatronModule):
         key_layer = rearrange(key_layer, "bs np nb sk hn -> sk (bs nb) np hn")
         value_layer = rearrange(value_layer, "bs np nb sv hn -> sv (bs nb) np hn")
         attention_mask = None
-        attention_bias = rearrange(attention_bias, 'b np nb sq sk -> (b nb) np sq sk')
+        if attention_bias is not None:
+            attention_bias = rearrange(attention_bias, 'b np nb sq sk -> (b nb) np sq sk')
 
         if global_attn_separate:
             global_query_layer = rearrange(side_q, "bs np sq hn -> sq bs np hn")

@@ -254,6 +254,7 @@ class Embedding(MegatronModule):
         self.num_tokentypes = num_tokentypes
         self.position_embedding_type = position_embedding_type
         self.transpose_batch_sequence = transpose_batch_sequence
+        self.max_sequence_length = max_sequence_length
 
         # Word embeddings (parallel).
         self.word_embeddings = tensor_parallel.VocabParallelEmbedding(
@@ -316,6 +317,7 @@ class Embedding(MegatronModule):
         words_embeddings = self.word_embeddings(input_ids)
         if self.position_embedding_type == 'learned_absolute':
             assert position_ids is not None
+            position_ids = torch.fmod(position_ids, self.max_sequence_length)
             position_embeddings = self.position_embeddings(position_ids)
             embeddings = words_embeddings + position_embeddings
         else:
