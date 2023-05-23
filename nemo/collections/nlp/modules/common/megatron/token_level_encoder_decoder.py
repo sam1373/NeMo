@@ -134,6 +134,7 @@ class MegatronTokenLevelEncoderDecoderModule(MegatronModule):
         self.global_tokens = encoder_cfg.get("global_tokens", 512)
         self.global_tokens_spacing = encoder_cfg.get("global_tokens_spacing", 16)
         self.global_token_mode = encoder_cfg.get("global_token_mode", "equal_spacing")
+        self.global_attn_separate = encoder_cfg.get("global_attn_separate", False)
         if encoder_cfg.get("transient_global_tokens", False):
             self.global_token_mode = "transient"
 
@@ -229,7 +230,7 @@ class MegatronTokenLevelEncoderDecoderModule(MegatronModule):
                 local_context=encoder_cfg.get("local_context", 128),
                 global_tokens=encoder_cfg.get("global_tokens", 4096),
                 global_tokens_spacing=encoder_cfg.get("global_tokens_spacing", 16),
-                global_attn_separate=encoder_cfg.get("global_attn_separate", True),
+                global_attn_separate=encoder_cfg.get("global_attn_separate", False),
                 transient_global_tokens=encoder_cfg.get("transient_global_tokens", False),
                 global_token_mode=encoder_cfg.get("global_token_mode", "equal_spacing"),
                 multi_query_attention=encoder_cfg.get('multi_query_attention', False),
@@ -518,17 +519,44 @@ class MegatronTokenLevelEncoderDecoderModule(MegatronModule):
                 )
             else:
                 if self.pre_compute_pos_bias:
-                    relative_position = build_rel_pos_long_attention(
-                        seq_length=enc_seq_length,
-                        global_token_mode=self.global_token_mode,
-                        global_tokens_spacing=self.global_tokens_spacing,
-                        local_context=self.local_context,
-                        global_tokens=self.global_tokens,
-                    )
-                    encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding.get_bias(
-                        relative_position
-                    ).transpose(0, 1)[None]
-                    # head, block, context, hidden
+                    if self.global_attn_separate:
+                        relative_position_local = build_rel_pos_long_attention(
+                            seq_length=enc_seq_length,
+                            global_token_mode="local_only",
+                            local_context=self.local_context,
+                        )
+                        relative_position_local_bias = self.encoder_relative_position_embedding.get_bias(
+                            relative_position_local
+                        ).transpose(0, 1)[None]
+
+                        # TODO: add util for this to work with other global modes
+                        equal_spaced_global_tokens_num = (
+                            enc_seq_length + self.global_tokens_spacing - 1
+                        ) // self.global_tokens_spacing
+                        relative_position_global_bias = self.encoder_relative_position_embedding(
+                            query_seq_length=equal_spaced_global_tokens_num,
+                            key_seq_length=equal_spaced_global_tokens_num,
+                        )
+                        encoder_self_attention_relative_position_bias = (
+                            relative_position_local_bias,
+                            relative_position_global_bias,
+                        )
+                    else:
+                        relative_position = build_rel_pos_long_attention(
+                            seq_length=enc_seq_length,
+                            global_token_mode=self.global_token_mode,
+                            global_tokens_spacing=self.global_tokens_spacing,
+                            local_context=self.local_context,
+                            global_tokens=self.global_tokens,
+                        )
+                        encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding.get_bias(
+                            relative_position
+                        ).transpose(
+                            0, 1
+                        )[
+                            None
+                        ]
+                        # head, block, context, hidden
                 else:
                     encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding
 

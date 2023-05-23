@@ -318,7 +318,9 @@ def build_attention_mask_3d(source_mask, target_mask, attn_mask_type):
     return mask
 
 
-def build_rel_pos_long_attention(seq_length, global_token_mode, global_tokens_spacing, local_context, global_tokens):
+def build_rel_pos_long_attention(
+    seq_length, global_token_mode, local_context, global_tokens_spacing=1, global_tokens=0
+):
 
     side_bias_idx = None
 
