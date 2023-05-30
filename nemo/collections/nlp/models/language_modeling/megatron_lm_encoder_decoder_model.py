@@ -1307,7 +1307,7 @@ class MegatronLMEncoderDecoderModel(MegatronBaseModel):
             tokens_enc, enc_mask, int(request['tokens_to_generate']), bos_id=bos_id
         )
         predicted_tokens_ids = predicted_tokens_ids.cpu().numpy()[0].tolist()
-        log_probs = log_probs.cpu().numpy()[0].tolist()
+        log_probs = log_probs.float().cpu().numpy()[0].tolist()
         if self.tokenizer.eos_id in predicted_tokens_ids:
             idx = predicted_tokens_ids.index(self.tokenizer.eos_id)
             predicted_tokens_ids = predicted_tokens_ids[:idx]

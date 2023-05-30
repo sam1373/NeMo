@@ -1057,6 +1057,9 @@ class CoreAttention(MegatronModule):
             if attention_bias.shape[0] == 1:
                 attention_bias = attention_bias.expand(b, *([-1] * (attention_bias.dim() - 1)))
 
+        if not self.use_long_attention and attention_bias is not None:
+            attention_bias = attention_bias[:, :, -sq:, -sk:]
+
         # ==================================================
         # Update query_layer, key_layer, value_layer.
         # query_layer: [sq, b, np, hn]
