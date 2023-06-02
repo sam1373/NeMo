@@ -27,6 +27,7 @@ from nemo.collections.nlp.modules.common.megatron.megatron_encoder_decoder impor
 from nemo.collections.nlp.modules.common.megatron.megatron_encoders import get_encoder_model
 from nemo.collections.nlp.modules.common.megatron.module import MegatronModule
 from nemo.collections.nlp.modules.common.megatron.t5_relative_position_embedding import T5RelativePositionEmbedding
+from nemo.collections.nlp.modules.common.megatron.rotary_pos_embedding import RotaryEmbedding
 from nemo.collections.nlp.modules.common.megatron.utils import (
     ApexGuardDefaults,
     build_position_ids,
@@ -138,6 +139,8 @@ class MegatronTokenLevelEncoderDecoderModule(MegatronModule):
         if encoder_cfg.get("transient_global_tokens", False):
             self.global_token_mode = "transient"
 
+        rotary_percentage = 1.0
+
         encoder_kv_channels, decoder_kv_channels = self._validate_config()
 
         encoder, decoder = None, None
@@ -177,6 +180,12 @@ class MegatronTokenLevelEncoderDecoderModule(MegatronModule):
                     max_seq_len=max_position_embeddings,
                 )
                 self._encoder_relative_position_embedding_key = "encoder_relative_position_embedding"
+            elif self.encoder_cfg.get('position_embedding_type', 'learned_absolute') == 'rope':
+                rotary_dim = self.hidden_size // encoder_cfg.num_attention_heads if encoder_kv_channels is None else encoder_kv_channels
+                assert 0 < rotary_percentage <= 1
+                if rotary_percentage < 1:
+                    rotary_dim = int(rotary_dim * rotary_percentage)
+                self.encoder_relative_position_embedding = RotaryEmbedding(rotary_dim)
             else:
                 self.encoder_relative_position_embedding = None
 
@@ -307,6 +316,12 @@ class MegatronTokenLevelEncoderDecoderModule(MegatronModule):
                     max_seq_len=max_position_embeddings,
                 )
                 self._decoder_relative_position_embedding_key = "decoder_relative_position_embedding"
+            elif self.decoder_cfg.get('position_embedding_type', 'learned_absolute') == 'rope':
+                rotary_dim = self.hidden_size // encoder_cfg.num_attention_heads if decoder_kv_channels is None else decoder_kv_channels
+                assert 0 < rotary_percentage <= 1
+                if rotary_percentage < 1:
+                    rotary_dim = int(rotary_dim * rotary_percentage)
+                self.decoder_relative_position_embedding = RotaryEmbedding(rotary_dim)
             else:
                 self.decoder_relative_position_embedding = None
 
@@ -513,52 +528,57 @@ class MegatronTokenLevelEncoderDecoderModule(MegatronModule):
             enc_seq_length = enc_attn_mask.size(1)
 
         if self.add_encoder and self.encoder_relative_position_embedding is not None:
-            if not self.encoder_cfg.get('use_long_attention'):
-                encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding(
-                    query_seq_length=enc_seq_length, key_seq_length=enc_seq_length,
-                )
+            if self.encoder_cfg.get('position_embedding_type', 'learned_absolute') == 'rope':
+                rotary_emb = self.encoder_relative_position_embedding(enc_seq_length)
+                encoder_self_attention_relative_position_bias = (rotary_emb, rotary_emb)
             else:
-                if self.pre_compute_pos_bias:
-                    if self.global_attn_separate:
-                        relative_position_local = build_rel_pos_long_attention(
-                            seq_length=enc_seq_length,
-                            global_token_mode="local_only",
-                            local_context=self.local_context,
-                        )
-                        relative_position_local_bias = self.encoder_relative_position_embedding.get_bias(
-                            relative_position_local
-                        ).transpose(0, 1)[None]
+                if not self.encoder_cfg.get('use_long_attention'):
 
-                        # TODO: add util for this to work with other global modes
-                        equal_spaced_global_tokens_num = (
-                            enc_seq_length + self.global_tokens_spacing - 1
-                        ) // self.global_tokens_spacing
-                        relative_position_global_bias = self.encoder_relative_position_embedding(
-                            query_seq_length=equal_spaced_global_tokens_num,
-                            key_seq_length=equal_spaced_global_tokens_num,
+                        encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding(
+                            query_seq_length=enc_seq_length, key_seq_length=enc_seq_length,
                         )
-                        encoder_self_attention_relative_position_bias = (
-                            relative_position_local_bias,
-                            relative_position_global_bias,
-                        )
-                    else:
-                        relative_position = build_rel_pos_long_attention(
-                            seq_length=enc_seq_length,
-                            global_token_mode=self.global_token_mode,
-                            global_tokens_spacing=self.global_tokens_spacing,
-                            local_context=self.local_context,
-                            global_tokens=self.global_tokens,
-                        )
-                        encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding.get_bias(
-                            relative_position
-                        ).transpose(
-                            0, 1
-                        )[
-                            None
-                        ]
-                        # head, block, context, hidden
                 else:
-                    encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding
+                    if self.pre_compute_pos_bias:
+                        if self.global_attn_separate:
+                            relative_position_local = build_rel_pos_long_attention(
+                                seq_length=enc_seq_length,
+                                global_token_mode="local_only",
+                                local_context=self.local_context,
+                            )
+                            relative_position_local_bias = self.encoder_relative_position_embedding.get_bias(
+                                relative_position_local
+                            ).transpose(0, 1)[None]
+
+                            # TODO: add util for this to work with other global modes
+                            equal_spaced_global_tokens_num = (
+                                enc_seq_length + self.global_tokens_spacing - 1
+                            ) // self.global_tokens_spacing
+                            relative_position_global_bias = self.encoder_relative_position_embedding(
+                                query_seq_length=equal_spaced_global_tokens_num,
+                                key_seq_length=equal_spaced_global_tokens_num,
+                            )
+                            encoder_self_attention_relative_position_bias = (
+                                relative_position_local_bias,
+                                relative_position_global_bias,
+                            )
+                        else:
+                            relative_position = build_rel_pos_long_attention(
+                                seq_length=enc_seq_length,
+                                global_token_mode=self.global_token_mode,
+                                global_tokens_spacing=self.global_tokens_spacing,
+                                local_context=self.local_context,
+                                global_tokens=self.global_tokens,
+                            )
+                            encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding.get_bias(
+                                relative_position
+                            ).transpose(
+                                0, 1
+                            )[
+                                None
+                            ]
+                            # head, block, context, hidden
+                    else:
+                        encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding
 
         if output_enc_hidden_only:
             # When pipeline parallel > 1 we need to make sure encoder exist (will be missing in decoder)
@@ -589,9 +609,13 @@ class MegatronTokenLevelEncoderDecoderModule(MegatronModule):
                 dec_input = None
 
             if self.add_decoder and self.decoder_relative_position_embedding is not None:
-                decoder_self_attention_relative_position_bias = self.decoder_relative_position_embedding(
-                    query_seq_length=dec_input_ids.size(1), key_seq_length=dec_input_ids.size(1)
-                )
+                if self.decoder_cfg.get('position_embedding_type', 'learned_absolute') == 'rope':
+                    rotary_emb = self.decoder_relative_position_embedding(dec_input_ids.size(1))
+                    decoder_self_attention_relative_position_bias = (rotary_emb, rotary_emb)
+                else:
+                    decoder_self_attention_relative_position_bias = self.decoder_relative_position_embedding(
+                        query_seq_length=dec_input_ids.size(1), key_seq_length=dec_input_ids.size(1)
+                    )
                 if not self.decoder_cfg.relative_position_bias_self_attention_only:
                     decoder_cross_attention_relative_position_bias = self.decoder_cross_attention_relative_position_embedding(
                         query_seq_length=dec_input_ids.size(1), key_seq_length=enc_seq_length,

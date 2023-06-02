@@ -215,6 +215,11 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
             reduce_amax=self.cfg.get('reduce_amax', True),
             use_emha=self.cfg.get('use_emha', False),
             use_flash_attention=self.cfg.get('use_flash_attention', False),
+            use_long_attention=self.cfg.get('use_long_attention', False),
+            local_context=self.cfg.get('local_context', 128),
+            global_tokens_spacing=self.cfg.get('global_tokens_spacing', 16),
+            global_attn_separate=self.cfg.get('global_attn_separate', True),
+            global_token_mode=self.cfg.get('global_token_mode', "equal_spacing"),
         )
 
         return model

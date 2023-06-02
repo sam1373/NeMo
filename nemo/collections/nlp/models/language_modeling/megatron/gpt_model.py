@@ -151,6 +151,11 @@ class GPTModel(MegatronModule):
         reduce_amax=True,
         use_emha=False,
         use_flash_attention=False,
+        use_long_attention=False,
+        local_context=128,
+        global_tokens_spacing=16,
+        global_attn_separate=True,
+        global_token_mode="equal_spacing",
     ):
         super(GPTModel, self).__init__(share_token_embeddings=share_embeddings_and_output_weights)
 
@@ -230,6 +235,11 @@ class GPTModel(MegatronModule):
             reduce_amax=reduce_amax,
             use_emha=use_emha,
             use_flash_attention=use_flash_attention,
+            use_long_attention=use_long_attention,
+            local_context=local_context,
+            global_tokens_spacing=global_tokens_spacing,
+            global_attn_separate=global_attn_separate,
+            global_token_mode=global_token_mode,
         )
 
         if self.share_embeddings_and_output_weights:

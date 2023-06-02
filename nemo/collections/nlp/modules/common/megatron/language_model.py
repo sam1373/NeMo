@@ -103,6 +103,11 @@ def get_language_model(
     reduce_amax=True,
     use_emha=False,
     use_flash_attention=False,
+    use_long_attention=False,
+    local_context=128,
+    global_tokens_spacing=16,
+    global_attn_separate=True,
+    global_token_mode="equal_spacing",
 ):
     """Build language model and return along with the key to save."""
 
@@ -178,6 +183,11 @@ def get_language_model(
         reduce_amax=reduce_amax,
         use_emha=use_emha,
         use_flash_attention=use_flash_attention,
+        use_long_attention=use_long_attention,
+        local_context=local_context,
+        global_tokens_spacing=global_tokens_spacing,
+        global_attn_separate=global_attn_separate,
+        global_token_mode=global_token_mode,
     )
     # key used for checkpoints.
     language_model_key = 'language_model'
@@ -480,6 +490,11 @@ class TransformerLanguageModel(MegatronModule):
         reduce_amax=True,
         use_emha=False,
         use_flash_attention=False,
+        use_long_attention=False,
+        local_context=128,
+        global_tokens_spacing=16,
+        global_attn_separate=True,
+        global_token_mode="equal_spacing",
     ):
         super(TransformerLanguageModel, self).__init__(share_token_embeddings=share_embeddings_and_output_weights)
 
@@ -593,6 +608,11 @@ class TransformerLanguageModel(MegatronModule):
             use_emha=use_emha,
             position_embedding_type=position_embedding_type,
             use_flash_attention=use_flash_attention,
+            use_long_attention=use_long_attention,
+            local_context=local_context,
+            global_tokens_spacing=global_tokens_spacing,
+            global_attn_separate=global_attn_separate,
+            global_token_mode=global_token_mode,
         )
         self._encoder_key = 'encoder'
 
@@ -634,6 +654,11 @@ class TransformerLanguageModel(MegatronModule):
                 transformer_engine=transformer_engine,
                 position_embedding_type=position_embedding_type,
                 use_flash_attention=use_flash_attention,
+                use_long_attention=use_long_attention,
+                local_context=local_context,
+                global_tokens_spacing=global_tokens_spacing,
+                global_attn_separate=global_attn_separate,
+                global_token_mode=global_token_mode,
             )
             self._decoder_key = 'decoder'
 
