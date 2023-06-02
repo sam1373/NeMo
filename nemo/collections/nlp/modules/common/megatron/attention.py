@@ -115,8 +115,8 @@ def _split_into_blocks(x: torch.Tensor, block_len: int, dim: int) -> torch.Tenso
     return x.reshape(output_shape)
 
 
-def _concatenate_3_blocks(x: torch.Tensor, block_dim: int, sequence_dim: int, pad_value: int = 0) -> torch.Tensor:
-    """Concatenate three consecutive blocks for each input block for local attentiont.
+def _concatenate_n_blocks(x: torch.Tensor, block_dim: int, sequence_dim: int, pad_value: int = 0, concat_num: int = 3) -> torch.Tensor:
+    """Concatenate three consecutive blocks for each input block for local attention.
 
     For more information, see: https://arxiv.org/pdf/2112.07916.pdf.
     """
@@ -129,7 +129,7 @@ def _concatenate_3_blocks(x: torch.Tensor, block_dim: int, sequence_dim: int, pa
     x = nn.functional.pad(x, pad=pad, mode="constant", value=pad_value)
 
     blocks_list: List[torch.Tensor] = []
-    for i in range(3):
+    for i in range(concat_num):
         # We use indexing approach here:
         # https://numpy.org/doc/stable/user/basics.indexing.html#dealing-with-variable-numbers-of-indices-within-programs
         indices = [slice(0, None)] * x.ndim
@@ -161,12 +161,12 @@ def _mask_local_attention_mask(local_attention_mask: torch.Tensor, block_len: in
     return torch.logical_and(local_attention_mask, locality_mask)
 
 
-def _get_local_attention_mask(attention_mask: torch.Tensor, block_len: int, device: torch.device) -> torch.Tensor:
+def _get_local_attention_mask(attention_mask: torch.Tensor, block_len: int, causal: bool, device: torch.device) -> torch.Tensor:
     """Prepare attention mask to be applied for a local attention."""
     # [batch_size, num_blocks, block_len]
     _blocked_attention_mask = _split_into_blocks(attention_mask, block_len, dim=1)
     # [batch_size, num_block, 3 * block_len]
-    _3blocked_attention_mask = _concatenate_3_blocks(_blocked_attention_mask, block_dim=1, sequence_dim=2)
+    _3blocked_attention_mask = _concatenate_n_blocks(_blocked_attention_mask, block_dim=1, sequence_dim=2, concat_num=3-causal)
 
     _blocked_attention_mask = _blocked_attention_mask.unsqueeze(-1)
     _3blocked_attention_mask = _3blocked_attention_mask.unsqueeze(-2)
@@ -1041,7 +1041,7 @@ class CoreAttention(MegatronModule):
         # ==================================================
         # Update attention mask for inference. [b, np, sq, sk]
         # ==================================================
-        if get_key_value:
+        if get_key_value and attention_mask is not None:
             with torch.no_grad():
                 if layer_past is not None:
                     attention_mask = attention_mask[..., sq - 1, :sk].unsqueeze(2)
@@ -1267,8 +1267,8 @@ class CoreAttention(MegatronModule):
         value_layer = _split_into_blocks(value_layer, self.local_context, dim=2)
 
         # Concatenate 3 blocks for keys and values -> (batch_size, n_heads, num_blocks, 3 * block_len, dim_per_head)
-        key_layer = _concatenate_3_blocks(key_layer, block_dim=2, sequence_dim=3)
-        value_layer = _concatenate_3_blocks(value_layer, block_dim=2, sequence_dim=3)
+        key_layer = _concatenate_n_blocks(key_layer, block_dim=2, sequence_dim=3, concat_num=3-causal)
+        value_layer = _concatenate_n_blocks(value_layer, block_dim=2, sequence_dim=3, concat_num=3-causal)
 
         if side_bias_idx is not None and not global_attn_separate:
             # Tile side inputs across local key/value blocks
@@ -1293,7 +1293,7 @@ class CoreAttention(MegatronModule):
 
         if not (causal and self.use_flash_attention):
             local_attention_mask = _get_local_attention_mask(
-                ~attention_mask.squeeze(1), self.local_context, attention_mask.device
+                ~attention_mask.squeeze(1), self.local_context, causal, attention_mask.device
             ).expand(-1, np, -1, -1, -1)
 
             # Default attend to all tokens including global tokens

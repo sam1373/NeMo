@@ -315,6 +315,7 @@ def synced_generate(
     top_k=0,
     top_p=0.0,
     greedy=False,
+    compute_attention_mask=True,
     repetition_penalty=1.2,
     min_tokens_to_generate=0,
 ):
@@ -338,6 +339,7 @@ def synced_generate(
             context_length_tensor,
             tokens_to_generate,
             all_probs,
+            compute_attention_mask=compute_attention_mask,
             temperature=temperature,
             extra={
                 "top_p": top_p,
@@ -404,6 +406,7 @@ def generate(
     top_k=0,
     top_p=0.0,
     greedy=False,
+    compute_attention_mask=True,
     repetition_penalty=1.0,
     min_tokens_to_generate=0,
     **strategy_args,
@@ -478,6 +481,7 @@ def generate(
         tokens_to_generate,
         all_probs,
         temperature,
+        compute_attention_mask=compute_attention_mask,
         top_k=top_k,
         top_p=top_p,
         greedy=greedy,
@@ -562,6 +566,7 @@ def sample_sequence_batch(
     context_lengths,
     tokens_to_generate,
     all_probs=False,
+    compute_attention_mask=True,
     type_ids=None,
     temperature=None,
     extra={},
@@ -611,7 +616,7 @@ def sample_sequence_batch(
         lengths = torch.ones([batch_size]).long().cuda() * maxlen
         while context_length < maxlen:
             batch, tensor_shape = inference_strategy.prepare_batch_at_step(
-                tokens, maxlen, micro_batch_size, counter, context_length
+                tokens, maxlen, micro_batch_size, counter, context_length, compute_attention_mask=compute_attention_mask
             )
 
             output = inference_strategy.forward_step(batch, tensor_shape)
