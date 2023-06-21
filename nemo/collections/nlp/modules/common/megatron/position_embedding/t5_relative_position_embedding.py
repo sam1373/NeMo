@@ -129,3 +129,17 @@ class T5RelativePositionEmbedding(torch.nn.Module):
             query_seq_length, key_seq_length
         )
         return self._compute_relative_position_bias(self_attention_relative_position_bucket)
+
+    def get_bias(self, relative_position):
+
+        relative_position_bucket_tensor = self._relative_position_bucket(
+            relative_position,
+            bidirectional=self.bidirectional,
+            num_buckets=self.relative_position_num_buckets,
+            max_distance=self.relative_position_max_distance,
+        )
+
+        bias = self.relative_position_embedding(relative_position_bucket_tensor)
+        bias = bias.permute(0, 3, 1, 2)
+
+        return bias

@@ -134,3 +134,9 @@ class ALiBiRelativePositionEmbedding(torch.nn.Module):
 
         # shape (1, num_heads, query_length, key_length)
         return -relative_position.unsqueeze(0) * self.slopes
+
+    def get_bias(self, relative_position):
+
+        relative_position = relative_position.unsqueeze(1).expand(-1, self.num_attention_heads, -1, -1).abs()
+
+        return -relative_position * self.slopes

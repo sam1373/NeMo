@@ -18,6 +18,8 @@ import math
 from typing import Dict, Iterator, List, Tuple, Union
 
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 try:
     from apex.normalization import MixedFusedRMSNorm
@@ -400,3 +402,157 @@ def _cast_if_autocast_enabled(tensor):
                 raise NotImplementedError()
             return tensor.to(dtype=dtype)
     return tensor
+
+
+def _pad_to_multiple(x: torch.Tensor, block_len: int, dim: int, pad_value: int = 0) -> torch.Tensor:
+    """Pad a tensor so that a sequence length will be a multiple of `block_len`"""
+    pad_len = -x.shape[dim] % block_len
+    # Handle cases when an empty input sequence is given
+    if not all(x.shape):
+        new_shape = list(x.shape)
+        new_shape[dim] += pad_len
+        return torch.zeros(new_shape, dtype=x.dtype)
+
+    pad = [(0, 0)] * x.ndim
+    pad[dim] = (0, pad_len)
+    pad = sum(pad[::-1], ())
+    x = nn.functional.pad(x, pad=pad, mode="constant", value=pad_value)
+    return x
+
+
+def _split_into_blocks(x: torch.Tensor, block_len: int, dim: int) -> torch.Tensor:
+    """Split an input tensor into blocks of a given `block_len` along the given `dim`. If the dimension length
+    is not a multiple of `block_len`, it will be padded first with selected `pad_value`.
+    """
+    # pad tensor to multiple of block_len
+    if x.shape[dim] % block_len != 0:
+        x = _pad_to_multiple(x, block_len, dim, pad_value=0)
+    num_blocks = x.shape[dim] // block_len
+    output_shape = x.shape[:dim] + (num_blocks, block_len) + x.shape[(dim + 1) :]
+    # If 0 is in output_shape, we cannot apply reshape because of incompatibility with ONNX conversion
+    if 0 in output_shape:
+        return torch.empty(output_shape, dtype=x.dtype, device=x.device)
+    return x.reshape(output_shape)
+
+
+def _concatenate_n_blocks(
+    x: torch.Tensor, block_dim: int, sequence_dim: int, pad_value: int = 0, concat_num: int = 3
+) -> torch.Tensor:
+    """Concatenate three consecutive blocks for each input block for local attention.
+
+    For more information, see: https://arxiv.org/pdf/2112.07916.pdf.
+    """
+    num_blocks = x.shape[block_dim]
+
+    pad = [(0, 0)] * x.ndim
+    pad[block_dim] = (1, 1)
+    pad = sum(pad[::-1], ())
+    # [batch_size, num_blocks, block_len] -> [batch_size, num_blocks + 2, block_len]
+    x = nn.functional.pad(x, pad=pad, mode="constant", value=pad_value)
+
+    blocks_list: List[torch.Tensor] = []
+    for i in range(concat_num):
+        # We use indexing approach here:
+        # https://numpy.org/doc/stable/user/basics.indexing.html#dealing-with-variable-numbers-of-indices-within-programs
+        indices = [slice(0, None)] * x.ndim
+        indices[block_dim] = slice(i, i + num_blocks)
+        indices = tuple(indices)
+        blocks_list.append(x[indices])
+    # [batch_size, num_blocks, 3 * block_len, ...]
+    return torch.cat(blocks_list, dim=sequence_dim)
+
+
+def _make_3block_relative_position_ids(block_len: int) -> torch.Tensor:
+    """Makes 3-blocked relative position ids for local attention."""
+    position_ids = torch.arange(3 * block_len, dtype=torch.int32)
+    center_position_ids = position_ids[block_len:-block_len]
+    # [block_len, 3 * block_len]
+    relative_position_ids = position_ids.unsqueeze(0) - center_position_ids.unsqueeze(1)
+    return relative_position_ids
+
+
+def _mask_local_attention_mask(
+    local_attention_mask: torch.Tensor, block_len: int, causal: bool = False
+) -> torch.Tensor:
+    """Mask local attention mask to enforce that tokens are not allowed to attend tokens farther than ``local_radius."""
+    relative_position_ids = _make_3block_relative_position_ids(block_len)
+    locality_mask = torch.abs(relative_position_ids) < block_len
+    if causal:
+        causal_mask = torch.tril(locality_mask.shape, block_len)
+        locality_mask = torch.logical_and(locality_mask, causal_mask)
+    locality_mask = locality_mask[None, None, :, :]
+    locality_mask = locality_mask.to(local_attention_mask.device)
+    return torch.logical_and(local_attention_mask, locality_mask)
+
+
+def _get_local_attention_mask(
+    attention_mask: torch.Tensor, block_len: int, causal: bool, device: torch.device
+) -> torch.Tensor:
+    """Prepare attention mask to be applied for a local attention."""
+    # [batch_size, num_blocks, block_len]
+    _blocked_attention_mask = _split_into_blocks(attention_mask, block_len, dim=1)
+    # [batch_size, num_block, 3 * block_len]
+    _3blocked_attention_mask = _concatenate_n_blocks(
+        _blocked_attention_mask, block_dim=1, sequence_dim=2, concat_num=3 - causal
+    )
+
+    _blocked_attention_mask = _blocked_attention_mask.unsqueeze(-1)
+    _3blocked_attention_mask = _3blocked_attention_mask.unsqueeze(-2)
+    # [batch_size, num_block, block_len, 3 * block_len]
+    local_attention_mask = torch.logical_and(_blocked_attention_mask, _3blocked_attention_mask)
+    local_attention_mask = _mask_local_attention_mask(local_attention_mask, block_len)
+    # [batch_size, 1, num_block, block_len, 3 * block_len]
+    return local_attention_mask.unsqueeze(1).to(device)
+
+
+def build_rel_pos_long_attention(
+    seq_length, use_long_attention, local_context, global_block_size, global_segment_pos_idx=False
+):
+
+    side_bias_idx = None
+
+    device = torch.cuda.current_device()
+
+    pad_len = -seq_length % local_context
+    num_blocks = (seq_length + pad_len) // local_context
+
+    if use_long_attention == "tglobal":
+        if global_segment_pos_idx:
+            side_bias_idx = torch.arange((seq_length + global_block_size - 1) // global_block_size, device=device,)
+            context_global_block_idx = side_bias_idx.repeat_interleave(global_block_size)
+            context_global_block_idx = F.pad(
+                context_global_block_idx, (0, seq_length + pad_len - context_global_block_idx.shape[0])
+            )
+        else:
+            side_bias_idx = torch.arange(
+                global_block_size // 2, global_block_size // 2 + seq_length, global_block_size, device=device,
+            )
+    elif use_long_attention != "local_only":
+
+        side_bias_idx = torch.arange(0, seq_length, global_block_size, device=device)
+
+    memory_position = torch.arange(3 * local_context, dtype=torch.long, device=device)
+    context_position = memory_position[local_context:-local_context]
+    relative_position = memory_position[None, :] - context_position[:, None]
+    relative_position = relative_position[None, :].expand(num_blocks, -1, -1)
+
+    global_tokens = 0
+
+    if side_bias_idx is not None:
+
+        if use_long_attention == "tglobal" and global_segment_pos_idx:
+            context_position = context_global_block_idx
+        else:
+            context_position = torch.arange(seq_length + pad_len, device=side_bias_idx.device)
+
+        relative_position_side = side_bias_idx[None, :] - context_position[:, None]
+
+        relative_position_side = relative_position_side.reshape(num_blocks, local_context, -1)
+
+        relative_position = torch.cat((relative_position, relative_position_side), dim=-1)
+
+        global_tokens = relative_position_side.shape[-1]
+
+    # block, q, kv
+
+    return relative_position, global_tokens

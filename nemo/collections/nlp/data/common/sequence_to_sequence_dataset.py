@@ -43,6 +43,7 @@ class SequenceToSequenceDataset(Dataset):
         add_bos_to_input: bool = True,
         add_eos_to_input: bool = True,
         replace_bos_with_pad: bool = False,
+        truncate_from_right: bool = True, # scrolls dataset is truncated from right
     ):
         super().__init__()
         self.src_file_name = src_file_name
@@ -54,6 +55,7 @@ class SequenceToSequenceDataset(Dataset):
         self.add_bos_to_input = add_bos_to_input
         self.add_eos_to_input = add_eos_to_input
         self.replace_bos_with_pad = replace_bos_with_pad
+        self.truncate_from_right = truncate_from_right
         assert self.max_src_seq_length > 0
         assert self.max_tgt_seq_length > 0
         self._check_files_exist()
@@ -94,9 +96,15 @@ class SequenceToSequenceDataset(Dataset):
                 )
                 # Truncate to max sequence length.
                 if len(src) > self.max_src_seq_length:
-                    src = src[-self.max_src_seq_length + 1 :]
+                    if self.truncate_from_right:
+                        src = src[: self.max_src_seq_length]
+                    else:
+                        src = src[-self.max_src_seq_length + 1 :]
                 if len(tgt) > self.max_tgt_seq_length:
-                    tgt = tgt[-self.max_tgt_seq_length + 1 :]
+                    if self.truncate_from_right:
+                        tgt = tgt[: self.max_tgt_seq_length]
+                    else:
+                        tgt = tgt[-self.max_tgt_seq_length + 1 :]
                 self.examples.append({'src': src, 'tgt': tgt})
 
         logging.info(f'Dataset Length : {len(self.examples)}')

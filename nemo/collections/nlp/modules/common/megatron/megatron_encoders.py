@@ -92,6 +92,9 @@ def get_encoder_model(
     version=1,  # model version
     position_embedding_type='learned_absolute',
     use_flash_attention=False,
+    use_long_attention=None,
+    local_context=128,
+    global_block_size=16,
 ):
     """Build language model and return along with the key to save."""
 
@@ -151,6 +154,9 @@ def get_encoder_model(
             moe_dropout=moe_dropout,
             position_embedding_type=position_embedding_type,
             use_flash_attention=use_flash_attention,
+            use_long_attention=use_long_attention,
+            local_context=local_context,
+            global_block_size=global_block_size,
         )
     elif arch == "retro":
         encoder = MegatronRetrievalTransformerEncoderModule(

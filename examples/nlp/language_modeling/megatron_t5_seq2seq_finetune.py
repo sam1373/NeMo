@@ -53,10 +53,21 @@ def _modify_config(t5_cfg, cfg, add_cfg_to_tree=False):
             t5_cfg.decoder.masked_softmax_fusion = False
             t5_cfg.encoder.hidden_dropout = cfg.model.get('hidden_dropout', 0.1)
             t5_cfg.decoder.hidden_dropout = cfg.model.get('hidden_dropout', 0.1)
+            t5_cfg.encoder.attention_dropout = cfg.model.get('attention_dropout', 0.1)
+            t5_cfg.decoder.attention_dropout = cfg.model.get('attention_dropout', 0.1)
             if hasattr(t5_cfg.encoder, 'ffn_dropout'):
                 t5_cfg.encoder.ffn_dropout = cfg.model.get('ffn_dropout', 0.1)
             if hasattr(t5_cfg.decoder, 'ffn_dropout'):
                 t5_cfg.decoder.ffn_dropout = cfg.model.get('ffn_dropout', 0.1)
+            if hasattr(cfg.model, 'use_long_attention'):
+                t5_cfg.encoder.use_long_attention = cfg.model.use_long_attention
+            if hasattr(cfg.model, 'local_context'):
+                t5_cfg.encoder.local_context = cfg.model.local_context
+            if hasattr(cfg.model, 'position_embedding_type'):
+                t5_cfg.encoder.position_embedding_type = cfg.model.position_embedding_type
+            if hasattr(cfg.model, 'use_flash_attention'):
+                t5_cfg.encoder.use_flash_attention = cfg.model.use_flash_attention
+                t5_cfg.decoder.use_flash_attention = cfg.model.use_flash_attention
         else:
             t5_cfg.hidden_dropout = cfg.model.get('hidden_dropout', 0.1)
             t5_cfg.attention_dropout = cfg.model.get('attention_dropout', 0.1)
@@ -86,7 +97,7 @@ def load_from_nemo(cls, cfg, trainer, t5_cfg, modify_confg_fn):
         trainer=trainer,
         override_config_path=t5_cfg,
         save_restore_connector=NLPSaveRestoreConnector(),
-        strict=False
+        strict=True,
     )
     return model
 

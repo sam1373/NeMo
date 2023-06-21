@@ -35,11 +35,19 @@ from nemo.collections.nlp.modules.common.megatron.utils import (
     ApexGuardDefaults,
     _cast_if_autocast_enabled,
     attention_mask_func,
+    _pad_to_multiple,
+    _split_into_blocks,
+    _concatenate_n_blocks,
+    _make_3block_relative_position_ids,
+    _mask_local_attention_mask,
+    _get_local_attention_mask,
 )
+
 from nemo.collections.nlp.parts import utils_funcs
 from nemo.core import adapter_mixins
 
 try:
+    from apex.normalization import MixedFusedRMSNorm
     from apex.transformer.enums import AttnMaskType, AttnType
     from apex.transformer.utils import divide as safe_divide
 
@@ -126,6 +134,9 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         gradient_accumulation_fusion=False,
         normalize_attention_scores=True,
         use_flash_attention=False,
+        use_long_attention=None,  # None / local_only / global / tglobal / global_to_global / global_sep?
+        local_context=128,
+        global_block_size=16,
     ):
         super(ParallelAttention, self).__init__()
         self.layer_number = max(1, layer_number)
@@ -137,6 +148,10 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
 
         self.megatron_legacy = megatron_legacy
         self.dtype = utils_funcs.dtype_from_precision(precision, megatron_amp_O2)
+
+        self.use_long_attention = use_long_attention
+        self.local_context = local_context
+        self.global_block_size = global_block_size
 
         self.set_accepted_adapter_types(
             [
@@ -208,6 +223,9 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                 gradient_accumulation_fusion=gradient_accumulation_fusion,
             )
 
+        if use_long_attention == "tglobal":
+            self.global_norm = MixedFusedRMSNorm(hidden_size, eps=1e-6)
+
         self.core_attention = CoreAttention(
             layer_number=self.layer_number,
             num_attention_heads=num_attention_heads,
@@ -224,6 +242,9 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
             normalize_attention_scores=normalize_attention_scores,
             position_embedding_type=position_embedding_type,
             use_flash_attention=use_flash_attention,
+            use_long_attention=use_long_attention,
+            local_context=local_context,
+            global_block_size=global_block_size,
         )
 
         # Output.
@@ -402,6 +423,37 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         # Query, Key, and Value
         # =====================
 
+        """
+        if self.use_long_attention == 'tglobal':
+            # batch_size, seq_len, hidden_size
+            hidden_states = hidden_states.transpose(1, 0)
+            block_ids, global_segment_ids = make_global_fixed_block_ids(
+                (~attention_mask.squeeze(1)).long() if attention_mask is not None else torch.ones(
+                    hidden_states.shape[:-1]),
+                self.global_block_size,
+            )
+            global_tokens_len = global_segment_ids.shape[-1]
+            global_tokens = create_global_aggregates(hidden_states, block_ids, global_tokens_len)
+            global_tokens = self.global_norm(global_tokens)
+            hidden_states = torch.cat((hidden_states, global_tokens), dim=1)
+            # seq_len, batch_size, hidden_size
+            hidden_states = hidden_states.transpose(1, 0)
+        """
+
+        global_pos_idx = torch.arange(0, hidden_states.shape[0], self.global_block_size, device=hidden_states.device)
+
+        if self.use_long_attention == "tglobal":
+            global_hidden_states = _pad_to_multiple(hidden_states, self.global_block_size, 0)
+            global_hidden_states = global_hidden_states.reshape(
+                -1, self.global_block_size, hidden_states.shape[-2], hidden_states.shape[-1]
+            )
+            global_hidden_states = global_hidden_states.sum(dim=1)
+            global_hidden_states = self.global_norm(global_hidden_states)
+            hidden_states = torch.cat((hidden_states, global_hidden_states), dim=0)
+
+        if global_pos_idx is not None:
+            global_pos_idx = global_pos_idx[None, :].expand(hidden_states.shape[1], -1)
+
         if self.attention_type == AttnType.self_attn:
             # Attention heads [sq, b, h] --> [sq, b, (np * 3 * hn)]
             mixed_x_layer, _ = self.query_key_value(hidden_states)
@@ -535,6 +587,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                 rotary_pos_emb=rotary_pos_emb,
                 relative_position_bias=relative_position_bias,
                 headscale_tensor=self.head_scale_tensor if self.headscale else None,
+                global_pos_idx=global_pos_idx,
             )
 
         # =================
@@ -737,6 +790,9 @@ class CoreAttention(MegatronModule):
         multi_query_attention=False,
         position_embedding_type='learned_absolute',
         use_flash_attention=False,
+        use_long_attention=None,  # None / local_only / global / tglobal / global_to_global / global_sep?
+        local_context=128,
+        global_block_size=16,
     ):
 
         super(CoreAttention, self).__init__()
@@ -810,6 +866,10 @@ class CoreAttention(MegatronModule):
         if position_embedding_type.lower() == 'xpos':
             self.xpos = XPOSPositionEmbedding(kv_channels)
 
+        self.use_long_attention = use_long_attention
+        self.local_context = local_context
+        self.global_block_size = global_block_size
+
     def forward(
         self,
         query_layer,
@@ -821,6 +881,7 @@ class CoreAttention(MegatronModule):
         rotary_pos_emb=None,
         relative_position_bias=None,
         headscale_tensor=None,
+        global_pos_idx=None,
     ):
         b, np, sq, sk, hn = (
             query_layer.size(1),
@@ -829,6 +890,10 @@ class CoreAttention(MegatronModule):
             key_layer.size(0),
             query_layer.size(3),
         )
+
+        use_long_attention = self.use_long_attention if ((self.use_long_attention is not None) and (sq > 1)) else None
+        causal = (self.attn_mask_type == AttnMaskType.causal) and (sq > 1)
+        global_attn_separate = use_long_attention == "global_to_global"
 
         # ==================================================
         # Update attention mask for inference. [b, np, sq, sk]
@@ -852,6 +917,9 @@ class CoreAttention(MegatronModule):
                 -sk:,
             ]
 
+            if global_attn_separate and relative_position_bias is not None:
+                relative_position_bias, relative_position_bias_global = relative_position_bias
+
         # ==================================================
         # Update query_layer, key_layer, value_layer
         # ==================================================
@@ -871,6 +939,29 @@ class CoreAttention(MegatronModule):
             key_layer = self.xpos(key_layer, offset=0, downscale=True)
 
         # ==================================================
+        # Local-Global Attention
+        # ==================================================
+
+        if use_long_attention:
+            (
+                query_layer,
+                key_layer,
+                value_layer,
+                attention_mask,
+                relative_position_bias,
+                global_qkv,
+            ) = self.get_long_attention_qkv(
+                query_layer,
+                key_layer,
+                value_layer,
+                attention_mask,
+                relative_position_bias,
+                global_pos_idx,
+                global_attn_separate,
+                causal,
+            )
+
+        # ==================================================
         # query_layer [sq, b, np, hn]
         # key_layer   [sk, b, np, hn]
         # value_layer [sk, b, np, hn]
@@ -879,6 +970,48 @@ class CoreAttention(MegatronModule):
         # context_layer [b, np, sq, hn]
         # ==================================================
         context_layer = self.attn_fn(query_layer, key_layer, value_layer, attention_mask, relative_position_bias)
+
+        if use_long_attention:
+            assert sq == sk, 'Long Attention can only be used for self-attention.'
+
+            if causal and self.use_flash_attention:
+                # hack
+                context_layer = context_layer[:, :, self.local_context :]
+
+            sq_true = sq
+            if use_long_attention == "tglobal":
+                sq_true -= global_pos_idx.shape[1]
+            nb = (sq_true + self.local_context - 1) // self.local_context
+            context_layer = rearrange(context_layer, '(b nb) np sq hn -> b np (nb sq) hn', nb=nb)
+            context_layer = context_layer[:, :, :sq_true]
+
+            if global_attn_separate:
+                global_q, global_k, global_v = global_qkv
+
+                if relative_position_bias_global is not None:
+                    relative_position_bias_global = relative_position_bias_global[
+                        :,
+                        self.num_attention_heads_partition_offset : self.num_attention_heads_partition_offset
+                        + self.num_attention_heads_per_partition,
+                    ]
+                    if relative_position_bias_global.shape[0] == 1:
+                        relative_position_bias_global = relative_position_bias_global.expand(
+                            b, *([-1] * (relative_position_bias_global.dim() - 1))
+                        )
+
+                global_token_context = self.attn_fn(
+                    query_layer=global_q.transpose(0, 1),
+                    key_layer=global_k.transpose(0, 1),
+                    value_layer=global_v.transpose(0, 1),
+                    attention_mask=None,
+                    attention_bias=relative_position_bias_global,
+                )
+
+                context_layer.scatter_(
+                    2,
+                    global_pos_idx[:, None, :, None].expand(-1, context_layer.shape[1], -1, context_layer.shape[3]),
+                    global_token_context,
+                )
 
         if headscale_tensor is not None:
             context_layer = context_layer * headscale_tensor
@@ -1046,3 +1179,136 @@ class CoreAttention(MegatronModule):
             context_layer = context_layer * attention_mask_q
 
         return context_layer
+
+    def get_long_attention_qkv(
+        self,
+        query_layer,
+        key_layer,
+        value_layer,
+        attention_mask,
+        relative_position_bias,
+        global_pos_idx,
+        global_attn_separate,
+        causal,
+    ):
+
+        # ==================================================
+        # Update query_layer, key_layer, value_layer
+        # ==================================================
+        if global_pos_idx is not None:
+            if self.use_long_attention == "tglobal":
+
+                total_transient_tokens = global_pos_idx.shape[1]
+
+                side_k = key_layer[-total_transient_tokens:]
+                side_v = value_layer[-total_transient_tokens:]
+
+                side_k = side_k.permute(1, 2, 0, 3)
+                side_v = side_v.permute(1, 2, 0, 3)
+
+                query_layer = query_layer[:-total_transient_tokens]
+                key_layer = key_layer[:-total_transient_tokens]
+                value_layer = value_layer[:-total_transient_tokens]
+            else:
+                side_k = torch.gather(
+                    key_layer.transpose(0, 1),
+                    dim=1,
+                    index=global_pos_idx[..., None, None].expand(-1, -1, key_layer.shape[-2], key_layer.shape[-1]),
+                )
+                side_v = torch.gather(
+                    value_layer.transpose(0, 1),
+                    dim=1,
+                    index=global_pos_idx[..., None, None].expand(-1, -1, value_layer.shape[-2], value_layer.shape[-1]),
+                )
+
+                side_k = side_k.transpose(1, 2).to(dtype=key_layer.dtype)
+                side_v = side_v.transpose(1, 2)
+
+                if global_attn_separate:
+                    side_q = torch.gather(
+                        query_layer.transpose(0, 1),
+                        dim=1,
+                        index=global_pos_idx[..., None, None].expand(
+                            -1, -1, value_layer.shape[-2], value_layer.shape[-1]
+                        ),
+                    )
+                    side_q = side_q.transpose(1, 2)
+
+                # [b, nh, sq/k, np]
+
+        # [sq/k, b, np, hn] -> [b, hn, sq/k, np]
+        query_layer = query_layer.permute(1, 2, 0, 3)
+        key_layer = key_layer.permute(1, 2, 0, 3)
+        value_layer = value_layer.permute(1, 2, 0, 3)
+
+        # Split into blocks -> (batch_size, n_heads, num_blocks, block_len, dim_per_head)
+        query_layer = _split_into_blocks(query_layer, self.local_context, dim=2)
+        key_layer = _split_into_blocks(key_layer, self.local_context, dim=2)
+        value_layer = _split_into_blocks(value_layer, self.local_context, dim=2)
+
+        # Concatenate 3 blocks for keys and values -> (batch_size, n_heads, num_blocks, 3 * block_len, dim_per_head)
+        key_layer = _concatenate_n_blocks(key_layer, block_dim=2, sequence_dim=3, concat_num=3 - causal)
+        value_layer = _concatenate_n_blocks(value_layer, block_dim=2, sequence_dim=3, concat_num=3 - causal)
+
+        if global_pos_idx is not None and not global_attn_separate:
+            # Tile side inputs across local key/value blocks
+            # New shape: (batch_size, n_heads, num_blocks, global_seq_len, dim_per_head)
+            reps = [1] * (side_k.ndim + 1)
+            reps[2] = key_layer.shape[2]
+            side_k = side_k.unsqueeze(2).repeat(reps)
+            side_v = side_v.unsqueeze(2).repeat(reps)
+
+            # Concatenate "local" and "side"/"global" key/value states
+            # New shape: (batch_size, n_heads, num_blocks, 3 * block_len + global_seq_len, dim_per_head)
+            key_layer = torch.cat([key_layer, side_k], dim=3)
+            value_layer = torch.cat([value_layer, side_v], dim=3)
+
+        # ==================================================
+        # Update attention_mask, attention_bias
+        # ==================================================
+        # [TODO] unified attention_mask dimension
+        # attention_mask: [b, 1, sk]
+        bs, np, nb, sk = key_layer.shape[:4]
+        sq = query_layer.shape[3]
+
+        if not (causal and self.use_flash_attention):
+            local_attention_mask = _get_local_attention_mask(
+                ~attention_mask.squeeze(1), self.local_context, causal, attention_mask.device
+            ).expand(-1, np, -1, -1, -1)
+
+            # Default attend to all tokens including global tokens
+            if not global_attn_separate:
+                attention_mask = torch.ones(
+                    bs, np, nb, sq, sk, dtype=local_attention_mask.dtype, device=torch.cuda.current_device(),
+                )
+                attention_mask[..., : local_attention_mask.shape[-1]] = local_attention_mask
+            else:
+                attention_mask = local_attention_mask
+
+            if relative_position_bias is None:
+                if not self.use_flash_attention:
+                    relative_position_bias = torch.where(attention_mask, 0.0, -1e10)
+            else:
+                relative_position_bias = relative_position_bias + torch.where(attention_mask, 0.0, -1e10)
+
+        query_layer = rearrange(query_layer, "bs np nb sq hn -> sq (bs nb) np hn")
+        key_layer = rearrange(key_layer, "bs np nb sk hn -> sk (bs nb) np hn")
+        value_layer = rearrange(value_layer, "bs np nb sv hn -> sv (bs nb) np hn")
+        attention_mask = None
+        if relative_position_bias is not None:
+            relative_position_bias = rearrange(relative_position_bias, 'b np nb sq sk -> (b nb) np sq sk')
+
+        if causal and self.use_flash_attention:
+            # temporary hack for causal until FA adds offset q param
+            query_layer = F.pad(query_layer, (0, 0, 0, 0, 0, 0, self.local_context, 0))
+
+        if global_attn_separate:
+            global_query_layer = rearrange(side_q, "bs np sq hn -> sq bs np hn")
+            global_key_layer = rearrange(side_k, "bs np sq hn -> sq bs np hn")
+            global_value_layer = rearrange(side_v, "bs np sq hn -> sq bs np hn")
+
+            global_qkv = (global_query_layer, global_key_layer, global_value_layer)
+        else:
+            global_qkv = None
+
+        return query_layer, key_layer, value_layer, attention_mask, relative_position_bias, global_qkv

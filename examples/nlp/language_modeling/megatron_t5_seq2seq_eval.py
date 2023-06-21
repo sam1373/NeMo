@@ -36,6 +36,9 @@ def _modify_config(t5_cfg, cfg, add_cfg_to_tree=False):
     with open_dict(t5_cfg):
         t5_cfg.precision = cfg.trainer.precision
         # Overwrite data configs
+        t5_cfg.data.validation_ds = cfg.model.data.validation_ds
+        if cfg.model.data.get('test_ds', None) is not None:
+            t5_cfg.data.test_ds = cfg.model.data.test_ds
         if cfg.model.data.validation_ds.get('src_file_name', None) is not None:
             logging.info(
                 'Found validation_ds.src_file_name in the config file. Overriding the finetuned model config file with the values from the new config file.'
@@ -56,6 +59,8 @@ def _modify_config(t5_cfg, cfg, add_cfg_to_tree=False):
 
         t5_cfg.data.validation_ds.micro_batch_size = cfg.model.data.validation_ds.micro_batch_size
         t5_cfg.data.validation_ds.global_batch_size = cfg.model.data.validation_ds.global_batch_size
+
+        #t5_cfg.encoder.position_embedding_type = "longt5_relative"
 
         # This is needed when modifying a hparam file directly to load `.ckpt` files.
         # This is not needed to modify the cfg in `.nemo` files.
