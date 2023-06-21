@@ -97,7 +97,7 @@ def load_from_nemo(cls, cfg, trainer, t5_cfg, modify_confg_fn):
         trainer=trainer,
         override_config_path=t5_cfg,
         save_restore_connector=NLPSaveRestoreConnector(),
-        strict=True,
+        strict=False,
     )
     return model
 
