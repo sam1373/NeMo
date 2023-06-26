@@ -41,7 +41,8 @@ class GPTSFTDataset(Dataset):
         separate_prompt_and_response_with_newline: bool = False,
         answer_only_loss: bool = True,
         truncation_field: str = "answer",
-        pad_to_max_length: bool = False,  # (@adithyare) allows for much faster training especially in PEFT settings.
+        pad_to_max_length: bool = False,
+        # (@adithyare) allows for much faster training especially in PEFT settings.
         index_mapping_dir: str = None,
         prompt_template: str = None,
         virtual_tokens: int = 0,
@@ -146,6 +147,13 @@ class GPTSFTDataset(Dataset):
         context = example[self.context_key]
         output = example[self.label_key]
 
+        # TODO to make configurabel via config
+        TOKEN_START = "<extra_id_1>"
+        TOKEN_END = "<extra_id_2>"
+        context_idx = context.index(TOKEN_START)
+        question = TOKEN_START + context[:context_idx] + TOKEN_END
+        context_only = context[context_idx + len(TOKEN_START) :]
+
         if self.prompt_template is not None:
             assert '{input}' in self.prompt_template
             assert '{output}' in self.prompt_template
@@ -168,12 +176,15 @@ class GPTSFTDataset(Dataset):
             pre_pad = [self.tokenizer.eos_id] * self.virtual_tokens
         else:
             pre_pad = []
+
         tokenized_text = pre_pad + self.tokenizer.text_to_ids(text)
         context_ids = pre_pad + self.tokenizer.text_to_ids(context)
         answer_ids = tokenized_text[len(context_ids) :]
+        question_ids = self.tokenizer.text_to_ids(question)
+        context_ids_only = self.tokenizer.text_to_ids(context_only)
+        context_ids = pre_pad + context_ids_only
+        total_ids = len(context_ids) + len(question_ids) + max(len(answer_ids), self.tokens_to_generate)
 
-        # for the long context cases, collate_fn includes self.tokens_to_generate for padding
-        total_ids = len(context_ids) + max(len(answer_ids), self.tokens_to_generate)
         if self.add_bos:
             total_ids += 1
         if self.add_sep:
@@ -189,8 +200,7 @@ class GPTSFTDataset(Dataset):
             elif self.truncation_field == "context":
                 context_ids = context_ids[: -min(truncation_length, len(context_ids))]
 
-        if len(context_ids) > self.max_seq_length:
-            context_ids = context_ids[: self.max_seq_length]
+        context_ids += question_ids
 
         assert len(context_ids) <= self.max_seq_length
         input_ids = context_ids
@@ -209,16 +219,12 @@ class GPTSFTDataset(Dataset):
         if self.add_eos:
             input_ids = input_ids + [self.tokenizer.eos_id]
 
-        if len(input_ids) < self.min_seq_length or len(input_ids) > self.max_seq_length:
-            input_ids = input_ids[: self.max_seq_length]
-
         processed_example = {
             'input_ids': input_ids,
             'answer_start_idx': answer_start_idx,
             'context_ids': context_ids,
             'context_length': len(context_ids),
         }
-
         return processed_example
 
     def _maybe_cast_to_list(self, x):

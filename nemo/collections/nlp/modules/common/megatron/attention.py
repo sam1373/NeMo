@@ -838,14 +838,18 @@ class CoreAttention(MegatronModule):
 
         coeff = None
         self.norm_factor = math.sqrt(self.hidden_size_per_attention_head)
-        if self.apply_query_key_layer_scaling:
-            coeff = self.layer_number
-            self.norm_factor *= coeff
+        # if self.apply_query_key_layer_scaling:
+        #    coeff = self.layer_number
+        #    self.norm_factor *= coeff
+
+        scale_mask_softmax_causal = self.attn_mask_type
+        if use_long_attention:
+            scale_mask_softmax_causal = AttnMaskType.padding
 
         self.scale_mask_softmax = MatchedScaleMaskSoftmax(
             self.fp16,
             self.bf16,
-            self.attn_mask_type,
+            scale_mask_softmax_causal,
             masked_softmax_fusion,
             attention_mask_func,
             self.attention_softmax_in_fp32,
@@ -865,6 +869,8 @@ class CoreAttention(MegatronModule):
 
         if position_embedding_type.lower() == 'xpos':
             self.xpos = XPOSPositionEmbedding(kv_channels)
+
+        self.use_flash_attention = use_flash_attention
 
         self.use_long_attention = use_long_attention
         self.local_context = local_context
@@ -895,6 +901,9 @@ class CoreAttention(MegatronModule):
         causal = (self.attn_mask_type == AttnMaskType.causal) and (sq > 1)
         global_attn_separate = use_long_attention == "global_to_global"
 
+        if use_long_attention and attention_mask is not None and len(attention_mask.shape) == 4:
+            attention_mask = ~torch.any(torch.eq(attention_mask, False), dim=3).squeeze(1)
+
         # ==================================================
         # Update attention mask for inference. [b, np, sq, sk]
         # ==================================================
@@ -908,7 +917,11 @@ class CoreAttention(MegatronModule):
         # ==================================================
         # Update attention bias. [b, np, sq, sk]
         # ==================================================
+        relative_position_bias_global = None
         if relative_position_bias is not None:
+            if self.global_attn_separate and relative_position_bias is not None:
+                relative_position_bias, relative_position_bias_global = relative_position_bias
+
             relative_position_bias = relative_position_bias[
                 :,
                 self.num_attention_heads_partition_offset : self.num_attention_heads_partition_offset
@@ -1192,6 +1205,11 @@ class CoreAttention(MegatronModule):
         causal,
     ):
 
+        if attention_mask is None:
+            attention_mask = torch.zeros(
+                query_layer.shape[1], query_layer.shape[0], device=torch.cuda.current_device()
+            ).to(dtype=torch.bool)
+
         # ==================================================
         # Update query_layer, key_layer, value_layer
         # ==================================================
@@ -1272,6 +1290,7 @@ class CoreAttention(MegatronModule):
         sq = query_layer.shape[3]
 
         if not (causal and self.use_flash_attention):
+
             local_attention_mask = _get_local_attention_mask(
                 ~attention_mask.squeeze(1), self.local_context, causal, attention_mask.device
             ).expand(-1, np, -1, -1, -1)

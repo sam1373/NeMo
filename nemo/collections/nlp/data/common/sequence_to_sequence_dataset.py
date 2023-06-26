@@ -43,7 +43,7 @@ class SequenceToSequenceDataset(Dataset):
         add_bos_to_input: bool = True,
         add_eos_to_input: bool = True,
         replace_bos_with_pad: bool = False,
-        truncate_from_right: bool = True, # scrolls dataset is truncated from right
+        truncate_from_right: bool = True,  # scrolls dataset is truncated from right
     ):
         super().__init__()
         self.src_file_name = src_file_name

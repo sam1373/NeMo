@@ -462,10 +462,13 @@ def _concatenate_n_blocks(
     return torch.cat(blocks_list, dim=sequence_dim)
 
 
-def _make_3block_relative_position_ids(block_len: int) -> torch.Tensor:
+def _make_3block_relative_position_ids(block_len: int, causal: bool = False) -> torch.Tensor:
     """Makes 3-blocked relative position ids for local attention."""
-    position_ids = torch.arange(3 * block_len, dtype=torch.int32)
-    center_position_ids = position_ids[block_len:-block_len]
+    position_ids = torch.arange((3 - causal) * block_len, dtype=torch.int32)
+    if causal:
+        center_position_ids = position_ids[block_len:]
+    else:
+        center_position_ids = position_ids[block_len:-block_len]
     # [block_len, 3 * block_len]
     relative_position_ids = position_ids.unsqueeze(0) - center_position_ids.unsqueeze(1)
     return relative_position_ids
@@ -475,10 +478,10 @@ def _mask_local_attention_mask(
     local_attention_mask: torch.Tensor, block_len: int, causal: bool = False
 ) -> torch.Tensor:
     """Mask local attention mask to enforce that tokens are not allowed to attend tokens farther than ``local_radius."""
-    relative_position_ids = _make_3block_relative_position_ids(block_len)
+    relative_position_ids = _make_3block_relative_position_ids(block_len, causal)
     locality_mask = torch.abs(relative_position_ids) < block_len
     if causal:
-        causal_mask = torch.tril(locality_mask.shape, block_len)
+        causal_mask = torch.tril(locality_mask, block_len)
         locality_mask = torch.logical_and(locality_mask, causal_mask)
     locality_mask = locality_mask[None, None, :, :]
     locality_mask = locality_mask.to(local_attention_mask.device)
@@ -500,13 +503,13 @@ def _get_local_attention_mask(
     _3blocked_attention_mask = _3blocked_attention_mask.unsqueeze(-2)
     # [batch_size, num_block, block_len, 3 * block_len]
     local_attention_mask = torch.logical_and(_blocked_attention_mask, _3blocked_attention_mask)
-    local_attention_mask = _mask_local_attention_mask(local_attention_mask, block_len)
+    local_attention_mask = _mask_local_attention_mask(local_attention_mask, block_len, causal)
     # [batch_size, 1, num_block, block_len, 3 * block_len]
     return local_attention_mask.unsqueeze(1).to(device)
 
 
 def build_rel_pos_long_attention(
-    seq_length, use_long_attention, local_context, global_block_size, global_segment_pos_idx=False
+    seq_length, use_long_attention, local_context, global_block_size, global_segment_pos_idx=False, causal=False
 ):
 
     side_bias_idx = None
@@ -531,8 +534,8 @@ def build_rel_pos_long_attention(
 
         side_bias_idx = torch.arange(0, seq_length, global_block_size, device=device)
 
-    memory_position = torch.arange(3 * local_context, dtype=torch.long, device=device)
-    context_position = memory_position[local_context:-local_context]
+    memory_position = torch.arange((3 - causal) * local_context, dtype=torch.long, device=device)
+    context_position = memory_position[local_context : local_context * 2]
     relative_position = memory_position[None, :] - context_position[:, None]
     relative_position = relative_position[None, :].expand(num_blocks, -1, -1)
 

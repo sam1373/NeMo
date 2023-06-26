@@ -60,7 +60,7 @@ def _modify_config(t5_cfg, cfg, add_cfg_to_tree=False):
         t5_cfg.data.validation_ds.micro_batch_size = cfg.model.data.validation_ds.micro_batch_size
         t5_cfg.data.validation_ds.global_batch_size = cfg.model.data.validation_ds.global_batch_size
 
-        #t5_cfg.encoder.position_embedding_type = "longt5_relative"
+        # t5_cfg.encoder.position_embedding_type = "longt5_relative"
 
         # This is needed when modifying a hparam file directly to load `.ckpt` files.
         # This is not needed to modify the cfg in `.nemo` files.

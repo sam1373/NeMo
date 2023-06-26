@@ -359,6 +359,9 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
             use_emha=self.cfg.get('use_emha', False),
             use_flash_attention=self.cfg.get('use_flash_attention', False),
             megatron_legacy=self.cfg.get('megatron_legacy', False),
+            use_long_attention=self.cfg.get('use_long_attention', None),
+            local_context=self.cfg.get('local_context', 128),
+            global_block_size=self.cfg.get('global_block_size', 16),
         )
 
         return model

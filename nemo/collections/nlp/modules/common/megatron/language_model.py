@@ -26,6 +26,8 @@ from nemo.collections.nlp.modules.common.megatron.position_embedding import (
     KERPLERelativePositionEmbedding,
     RotaryEmbedding,
     SandwichRelativePositionEmbedding,
+    T5RelativePositionEmbedding,
+    LongT5RelativePositionEmbedding,
 )
 from nemo.collections.nlp.modules.common.megatron.transformer import ParallelTransformer
 from nemo.collections.nlp.modules.common.megatron.utils import (
@@ -33,6 +35,7 @@ from nemo.collections.nlp.modules.common.megatron.utils import (
     get_linear_layer,
     init_method_normal,
     scaled_init_method_normal,
+    build_rel_pos_long_attention,
 )
 from nemo.collections.nlp.parts import utils_funcs
 from nemo.core import adapter_mixins
@@ -122,6 +125,9 @@ def get_language_model(
     reduce_amax=True,
     use_emha=False,
     use_flash_attention=False,
+    use_long_attention=None,
+    local_context=128,
+    global_block_size=16,
 ):
     """Build language model and return along with the key to save."""
 
@@ -198,6 +204,9 @@ def get_language_model(
         reduce_amax=reduce_amax,
         use_emha=use_emha,
         use_flash_attention=use_flash_attention,
+        use_long_attention=use_long_attention,
+        local_context=local_context,
+        global_block_size=global_block_size,
     )
     # key used for checkpoints.
     language_model_key = 'language_model'
@@ -505,6 +514,9 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
         reduce_amax=True,
         use_emha=False,
         use_flash_attention=False,
+        use_long_attention=None,
+        local_context=128,
+        global_block_size=16,
     ):
         super(TransformerLanguageModel, self).__init__(share_token_embeddings=share_embeddings_and_output_weights)
 
@@ -526,6 +538,10 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
         self.share_embeddings_and_output_weights = share_embeddings_and_output_weights
         self.sequence_parallel = sequence_parallel
         self.dtype = utils_funcs.dtype_from_precision(precision, megatron_amp_O2)
+        self.use_long_attention = use_long_attention
+        self.local_context = local_context
+        self.global_block_size = global_block_size
+        embedding_init_method_std = 0.02
         if kv_channels is None:
 
             assert (
@@ -568,6 +584,22 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
                 layer_type=LayerType.encoder,
                 num_attention_heads_alibi=None,
                 max_seq_len=max_position_embeddings,
+            )
+
+        elif position_embedding_type == 'relative':
+            self.encoder_relative_position_embedding = T5RelativePositionEmbedding(
+                init_method=init_method_normal(embedding_init_method_std),
+                num_attention_heads=num_attention_heads,
+                bidirectional=encoder_attn_mask_type != AttnMaskType.causal,
+                layer_type=LayerType.encoder,
+            )
+
+        elif position_embedding_type == 'longt5_relative':
+            self.encoder_relative_position_embedding = LongT5RelativePositionEmbedding(
+                init_method=init_method_normal(embedding_init_method_std),
+                num_attention_heads=num_attention_heads,
+                bidirectional=encoder_attn_mask_type != AttnMaskType.causal,
+                layer_type=LayerType.encoder,
             )
 
         elif position_embedding_type == 'kerple':
@@ -645,6 +677,9 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
             use_emha=use_emha,
             position_embedding_type=position_embedding_type,
             use_flash_attention=use_flash_attention,
+            use_long_attention=use_long_attention,
+            local_context=local_context,
+            global_block_size=global_block_size,
         )
         self._encoder_key = 'encoder'
 
@@ -781,12 +816,64 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
             self.position_embedding_type == 'alibi'
             or self.position_embedding_type == 'sandwich'
             or self.position_embedding_type == 'kerple'
+            or self.position_embedding_type == 'relative'
+            or self.position_embedding_type == 'longt5_relative'
         ):
-            encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding(
-                query_seq_length=enc_seq_length, key_seq_length=enc_seq_length,
-            )
-            # causal attention bias: [1, head, 1, k]
-            # non-causal attention bias: [1, head, q, k]
+            if not self.use_long_attention:
+                encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding(
+                    query_seq_length=enc_seq_length, key_seq_length=enc_seq_length,
+                )
+            else:
+                longt5_rel = self.position_embedding_type == 'longt5_relative'
+                global_attn_separate = self.use_long_attention == "global_to_global"
+
+                if global_attn_separate:
+                    relative_position_local = build_rel_pos_long_attention(
+                        seq_length=enc_seq_length,
+                        use_long_attention=self.use_long_attention,
+                        local_context=self.local_context,
+                        global_block_size=self.global_block_size,
+                        global_segment_pos_idx=False,
+                    )
+                    relative_position_local_bias = self.encoder_relative_position_embedding.get_bias(
+                        relative_position_local
+                    ).transpose(0, 1)[None]
+
+                    equal_spaced_global_tokens_num = (
+                        enc_seq_length + self.global_block_size - 1
+                    ) // self.global_block_size
+                    relative_position_global_bias = self.encoder_relative_position_embedding(
+                        query_seq_length=equal_spaced_global_tokens_num, key_seq_length=equal_spaced_global_tokens_num,
+                    )
+                    encoder_self_attention_relative_position_bias = (
+                        relative_position_local_bias,
+                        relative_position_global_bias,
+                    )
+                else:
+                    relative_position, global_tokens = build_rel_pos_long_attention(
+                        seq_length=enc_seq_length,
+                        use_long_attention=self.use_long_attention,
+                        local_context=self.local_context,
+                        global_block_size=self.global_block_size,
+                        global_segment_pos_idx=longt5_rel,
+                        causal=True,
+                    )
+
+                    if longt5_rel:
+                        encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding.get_bias(
+                            relative_position, global_tokens=global_tokens
+                        )
+                    else:
+                        encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding.get_bias(
+                            relative_position
+                        )
+
+                    encoder_self_attention_relative_position_bias = encoder_self_attention_relative_position_bias.transpose(
+                        0, 1
+                    )[
+                        None
+                    ]
+                    # 1, head, block, q, k
 
         # encoder.
         if enc_hidden_states is None:

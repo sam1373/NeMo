@@ -566,30 +566,54 @@ class MegatronTokenLevelEncoderDecoderModule(MegatronModule):
                 )
             else:
                 longt5_rel = self.encoder_cfg.get('position_embedding_type', 'learned_absolute') == 'longt5_relative'
+                global_attn_separate = self.use_long_attention == "global_to_global"
 
-                relative_position, global_tokens = build_rel_pos_long_attention(
-                    seq_length=enc_seq_length,
-                    use_long_attention=self.use_long_attention,
-                    local_context=self.local_context,
-                    global_block_size=self.global_block_size,
-                    global_segment_pos_idx=longt5_rel,
-                )
+                if global_attn_separate:
+                    relative_position_local = build_rel_pos_long_attention(
+                        seq_length=enc_seq_length,
+                        use_long_attention=self.use_long_attention,
+                        local_context=self.local_context,
+                        global_block_size=self.global_block_size,
+                        global_segment_pos_idx=False,
+                    )
+                    relative_position_local_bias = self.encoder_relative_position_embedding.get_bias(
+                        relative_position_local
+                    ).transpose(0, 1)[None]
 
-                if longt5_rel:
-                    encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding.get_bias(
-                        relative_position, global_tokens=global_tokens
+                    equal_spaced_global_tokens_num = (
+                        enc_seq_length + self.global_block_size - 1
+                    ) // self.global_block_size
+                    relative_position_global_bias = self.encoder_relative_position_embedding(
+                        query_seq_length=equal_spaced_global_tokens_num, key_seq_length=equal_spaced_global_tokens_num,
+                    )
+                    encoder_self_attention_relative_position_bias = (
+                        relative_position_local_bias,
+                        relative_position_global_bias,
                     )
                 else:
-                    encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding.get_bias(
-                        relative_position
+                    relative_position, global_tokens = build_rel_pos_long_attention(
+                        seq_length=enc_seq_length,
+                        use_long_attention=self.use_long_attention,
+                        local_context=self.local_context,
+                        global_block_size=self.global_block_size,
+                        global_segment_pos_idx=longt5_rel,
                     )
 
-                encoder_self_attention_relative_position_bias = encoder_self_attention_relative_position_bias.transpose(
-                    0, 1
-                )[
-                    None
-                ]
-                # 1, head, block, q, kv
+                    if longt5_rel:
+                        encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding.get_bias(
+                            relative_position, global_tokens=global_tokens
+                        )
+                    else:
+                        encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding.get_bias(
+                            relative_position
+                        )
+
+                    encoder_self_attention_relative_position_bias = encoder_self_attention_relative_position_bias.transpose(
+                        0, 1
+                    )[
+                        None
+                    ]
+                    # 1, head, block, q, k
 
         if output_enc_hidden_only:
             # When pipeline parallel > 1 we need to make sure encoder exist (will be missing in decoder)

@@ -102,72 +102,22 @@ class LongT5RelativePositionEmbedding(torch.nn.Module):
         relative_buckets += torch.where(is_small, relative_position, relative_postion_if_large)
         return relative_buckets
 
-    def _compute_local_position_bias(self, attention_mask):
-        target_device = self.local_position_embedding.weight.device
-        block_length = self.local_context
-        memory_position = torch.arange(3 * block_length, dtype=torch.long, device=target_device)
-        context_position = memory_position[block_length:-block_length]
-        relative_position = memory_position[None, :] - context_position[:, None]
-        local_position_bucket = self._relative_position_bucket(
-            relative_position,
+    def forward(self, query_seq_length, key_seq_length):
+        device = self.local_position_embedding.weight.device
+        context_position = torch.arange(query_seq_length, dtype=torch.long, device=device)[:, None]
+        memory_position = torch.arange(key_seq_length, dtype=torch.long, device=device)[None, :]
+
+        relative_position = memory_position - context_position  # shape (query_length, key_length)
+        relative_position_bucket_tensor = self._relative_position_bucket(
+            relative_position,  # shape (query_length, key_length)
             bidirectional=self.bidirectional,
             num_buckets=self.relative_position_num_buckets,
             max_distance=self.relative_position_max_distance,
         )
+        bias = self.global_position_embedding(relative_position_bucket_tensor)
+        bias = bias.permute(2, 0, 1).unsqueeze(0)
 
-        # shape (block_length, 3 * block_length, num_heads)
-        values = self.local_position_embedding(local_position_bucket)
-        # shape (1, 1, num_heads, block_length, 3 * block_length)
-        values = values.permute([2, 0, 1]).unsqueeze(0).unsqueeze(0)
-
-        local_attention_mask = get_local_attention_mask(attention_mask, self.local_context, target_device)
-        local_attention_mask = torch.where(local_attention_mask > 0, 0.0, -1e10)
-
-        return values + local_attention_mask
-
-    def _compute_global_position_bias(self, attention_mask):
-        target_device = self.global_position_embedding.weight.device
-        attention_mask = attention_mask.to(target_device)
-        block_ids, global_segment_ids = make_global_fixed_block_ids(attention_mask, self.global_block_size)
-
-        global_seq_len = global_segment_ids.shape[-1]
-        global_positions = torch.arange(global_seq_len, device=target_device)
-        relative_position = global_positions - block_ids[..., None]
-
-        global_position_bucket = self._relative_position_bucket(
-            relative_position,
-            bidirectional=self.bidirectional,
-            num_buckets=self.relative_position_num_buckets,
-            max_distance=self.relative_position_max_distance,
-        )
-
-        # shape (b, seq_length, global_seq_len, num_heads)
-        values = self.global_position_embedding(global_position_bucket)
-        # shape (b, num_heads, seq_length, global_seq_len)
-        values = values.permute([0, 3, 1, 2])
-
-        global_attention_mask = torch.eq(attention_mask[..., None], global_segment_ids[:, None, :])[:, None, ...]
-        global_attention_mask = torch.where(global_attention_mask > 0, 0.0, -1e10)
-
-        return values + global_attention_mask
-
-    def forward(self, attention_mask):
-        # (1, 1, num_heads, block_len, 3 * block_len)
-        local_position_bias = self._compute_local_position_bias(attention_mask)
-
-        if self.long_attention_type == 'tglobal':
-            # (batch_size, num_heads, seq_length, global_seq_len)
-            global_position_bias = self._compute_global_position_bias(attention_mask)
-            # (batch_size, num_blocks, num_heads, block_len, global_seq_len)
-            global_position_bias = split_into_blocks(global_position_bias, self.local_context, dim=-2).transpose(1, 2)
-            bz, n_b = global_position_bias.shape[:2]
-            local_position_bias = local_position_bias.expand(bz, n_b, *([-1] * (local_position_bias.dim() - 2)))
-            # (batch_size, num_blocks, num_heads, block_len, 3 * block_len + global_seq_len)
-            position_bias = torch.cat([local_position_bias, global_position_bias], dim=-1)
-        else:
-            position_bias = local_position_bias
-
-        return position_bias
+        return bias
 
     def get_bias(self, relative_position, global_tokens=0):
 
