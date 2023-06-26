@@ -67,6 +67,12 @@ def _modify_config(gpt_cfg, cfg, add_cfg_to_tree=False):
         if 'use_flash_attention' in cfg.model:
             gpt_cfg.use_flash_attention = cfg.model.use_flash_attention
 
+        if 'use_long_attention' in cfg.model:
+            gpt_cfg.use_long_attention = cfg.model.use_long_attention
+
+        if 'position_embedding_type' in cfg.model:
+            gpt_cfg.position_embedding_type = cfg.model.position_embedding_type
+
         sft_cls = MegatronGPTSFTModel
         gpt_cfg.target = f"{sft_cls.__module__}.{sft_cls.__name__}"
 
