@@ -41,6 +41,7 @@ from nemo.collections.nlp.modules.common.megatron.utils import (
     _make_3block_relative_position_ids,
     _mask_local_attention_mask,
     _get_local_attention_mask,
+    build_rel_pos_long_attention
 )
 
 from nemo.collections.nlp.parts import utils_funcs
@@ -1007,6 +1008,14 @@ class CoreAttention(MegatronModule):
                         self.num_attention_heads_partition_offset : self.num_attention_heads_partition_offset
                         + self.num_attention_heads_per_partition,
                     ]
+
+                    if causal:
+                        nd, ns = relative_position_bias_global.shape[-2:]
+                        i = torch.arange(nd)[:, None]
+                        j = torch.arange(ns)
+                        causal_mask = i > j - ns + nd
+                        relative_position_bias_global += torch.where(causal_mask, 0.0, -1e10)
+
                     if relative_position_bias_global.shape[0] == 1:
                         relative_position_bias_global = relative_position_bias_global.expand(
                             b, *([-1] * (relative_position_bias_global.dim() - 1))
@@ -1018,7 +1027,7 @@ class CoreAttention(MegatronModule):
                     value_layer=global_v.transpose(0, 1),
                     attention_mask=None,
                     attention_bias=relative_position_bias_global,
-                )
+                ).transpose(0, 2)
 
                 context_layer.scatter_(
                     2,
@@ -1309,6 +1318,18 @@ class CoreAttention(MegatronModule):
                     relative_position_bias = torch.where(attention_mask, 0.0, -1e10)
             else:
                 relative_position_bias = relative_position_bias + torch.where(attention_mask, 0.0, -1e10)
+
+            if causal:
+                relative_position, global_tokens = build_rel_pos_long_attention(
+                    seq_length=sq*nb,
+                    use_long_attention=self.use_long_attention,
+                    local_context=self.local_context,
+                    global_block_size=self.global_block_size,
+                    global_segment_pos_idx=(self.use_long_attention == 'longt5_relative'),
+                    causal=True
+                )
+
+                relative_position_bias += torch.where(relative_position >= 0, -1e10, 0)
 
         query_layer = rearrange(query_layer, "bs np nb sq hn -> sq (bs nb) np hn")
         key_layer = rearrange(key_layer, "bs np nb sk hn -> sk (bs nb) np hn")
