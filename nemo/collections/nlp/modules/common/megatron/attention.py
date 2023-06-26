@@ -285,6 +285,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         rotary_pos_emb=None,
         relative_position_bias=None,
         headscale_tensor=None,
+        global_pos_idx=None,
     ):
         """Forward method with activation checkpointing."""
 
@@ -315,6 +316,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                 rotary_pos_emb=rotary_pos_emb,
                 relative_position_bias=relative_position_bias,
                 headscale_tensor=headscale_tensor,
+                global_pos_idx=global_pos_idx
             )
             return output_
 
@@ -576,6 +578,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                 rotary_pos_emb=rotary_pos_emb,
                 relative_position_bias=relative_position_bias,
                 headscale_tensor=self.head_scale_tensor if self.headscale else None,
+                global_pos_idx=global_pos_idx,
             )
         else:
             context_layer = self.core_attention(
