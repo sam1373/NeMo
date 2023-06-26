@@ -1013,7 +1013,7 @@ class CoreAttention(MegatronModule):
                         nd, ns = relative_position_bias_global.shape[-2:]
                         i = torch.arange(nd)[:, None]
                         j = torch.arange(ns)
-                        causal_mask = i > j - ns + nd
+                        causal_mask = i >= j - ns + nd
                         relative_position_bias_global += torch.where(causal_mask, 0.0, -1e10)
 
                     if relative_position_bias_global.shape[0] == 1:
@@ -1268,6 +1268,8 @@ class CoreAttention(MegatronModule):
         key_layer = key_layer.permute(1, 2, 0, 3)
         value_layer = value_layer.permute(1, 2, 0, 3)
 
+        sq0 = query_layer.shape[2]
+
         # Split into blocks -> (batch_size, n_heads, num_blocks, block_len, dim_per_head)
         query_layer = _split_into_blocks(query_layer, self.local_context, dim=2)
         key_layer = _split_into_blocks(key_layer, self.local_context, dim=2)
@@ -1319,9 +1321,9 @@ class CoreAttention(MegatronModule):
             else:
                 relative_position_bias = relative_position_bias + torch.where(attention_mask, 0.0, -1e10)
 
-            if causal:
+            if causal and not global_attn_separate:
                 relative_position, global_tokens = build_rel_pos_long_attention(
-                    seq_length=sq*nb,
+                    seq_length=sq0,
                     use_long_attention=self.use_long_attention,
                     local_context=self.local_context,
                     global_block_size=self.global_block_size,
@@ -1329,7 +1331,7 @@ class CoreAttention(MegatronModule):
                     causal=True
                 )
 
-                relative_position_bias += torch.where(relative_position >= 0, -1e10, 0)
+                relative_position_bias += torch.where(relative_position > 0, -1e10, 0)
 
         query_layer = rearrange(query_layer, "bs np nb sq hn -> sq (bs nb) np hn")
         key_layer = rearrange(key_layer, "bs np nb sk hn -> sk (bs nb) np hn")
