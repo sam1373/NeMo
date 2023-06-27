@@ -579,7 +579,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
             # addition for decoder. Currently it is only used for decoder model only.
             # Encoder-decoder model, such as T5 is implemented in token_level_encoder_decoder.py
             self.encoder_relative_position_embedding = ALiBiRelativePositionEmbedding(
-                bidirectional=encoder_attn_mask_type != AttnMaskType.causal,
+                bidirectional=encoder_attn_mask_type != AttnMaskType.causal or self.use_long_attention is not None,
                 num_attention_heads=num_attention_heads,
                 layer_type=LayerType.encoder,
                 num_attention_heads_alibi=None,
@@ -828,19 +828,20 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
                 global_attn_separate = self.use_long_attention == "global_to_global"
 
                 if global_attn_separate:
-                    relative_position_local = build_rel_pos_long_attention(
+                    relative_position_local, global_tokens = build_rel_pos_long_attention(
                         seq_length=enc_seq_length,
-                        use_long_attention=self.use_long_attention,
+                        use_long_attention="local_only",
                         local_context=self.local_context,
                         global_block_size=self.global_block_size,
                         global_segment_pos_idx=False,
+                        causal=True,
                     )
                     relative_position_local_bias = self.encoder_relative_position_embedding.get_bias(
                         relative_position_local
                     ).transpose(0, 1)[None]
 
                     equal_spaced_global_tokens_num = (
-                        enc_seq_length + self.global_block_size - 1
+                        encoder_input.size(0) + self.global_block_size - 1
                     ) // self.global_block_size
                     relative_position_global_bias = self.encoder_relative_position_embedding(
                         query_seq_length=equal_spaced_global_tokens_num, key_seq_length=equal_spaced_global_tokens_num,

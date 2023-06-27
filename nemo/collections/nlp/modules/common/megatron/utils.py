@@ -559,4 +559,3 @@ def build_rel_pos_long_attention(
     # block, q, kv
 
     return relative_position, global_tokens
-

@@ -41,7 +41,7 @@ from nemo.collections.nlp.modules.common.megatron.utils import (
     _make_3block_relative_position_ids,
     _mask_local_attention_mask,
     _get_local_attention_mask,
-    build_rel_pos_long_attention
+    build_rel_pos_long_attention,
 )
 
 from nemo.collections.nlp.parts import utils_funcs
@@ -316,7 +316,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                 rotary_pos_emb=rotary_pos_emb,
                 relative_position_bias=relative_position_bias,
                 headscale_tensor=headscale_tensor,
-                global_pos_idx=global_pos_idx
+                global_pos_idx=global_pos_idx,
             )
             return output_
 
@@ -923,19 +923,19 @@ class CoreAttention(MegatronModule):
         # ==================================================
         relative_position_bias_global = None
         if relative_position_bias is not None:
-            if self.global_attn_separate and relative_position_bias is not None:
+            if isinstance(relative_position_bias, tuple):
                 relative_position_bias, relative_position_bias_global = relative_position_bias
 
             relative_position_bias = relative_position_bias[
                 :,
                 self.num_attention_heads_partition_offset : self.num_attention_heads_partition_offset
                 + self.num_attention_heads_per_partition,
-                -sq:,
-                -sk:,
             ]
 
-            if global_attn_separate and relative_position_bias is not None:
-                relative_position_bias, relative_position_bias_global = relative_position_bias
+            if not use_long_attention:
+                relative_position_bias = relative_position_bias[
+                    :, :, -sq:, -sk:,
+                ]
 
         # ==================================================
         # Update query_layer, key_layer, value_layer
@@ -1005,32 +1005,34 @@ class CoreAttention(MegatronModule):
             if global_attn_separate:
                 global_q, global_k, global_v = global_qkv
 
-                if relative_position_bias_global is not None:
-                    relative_position_bias_global = relative_position_bias_global[
-                        :,
-                        self.num_attention_heads_partition_offset : self.num_attention_heads_partition_offset
-                        + self.num_attention_heads_per_partition,
-                    ]
+                if relative_position_bias_global is None:
+                    relative_position_bias_global = torch.zeros(1, self.num_attention_heads_per_partition, global_q.shape[0], global_k.shape[0], device=global_q.device)
 
-                    if causal:
-                        nd, ns = relative_position_bias_global.shape[-2:]
-                        i = torch.arange(nd)[:, None]
-                        j = torch.arange(ns)
-                        causal_mask = i >= j - ns + nd
-                        relative_position_bias_global += torch.where(causal_mask, 0.0, -1e10)
+                relative_position_bias_global = relative_position_bias_global[
+                    :,
+                    self.num_attention_heads_partition_offset : self.num_attention_heads_partition_offset
+                    + self.num_attention_heads_per_partition,
+                ]
 
-                    if relative_position_bias_global.shape[0] == 1:
-                        relative_position_bias_global = relative_position_bias_global.expand(
-                            b, *([-1] * (relative_position_bias_global.dim() - 1))
-                        )
+                if causal:
+                    nd, ns = relative_position_bias_global.shape[-2:]
+                    i = torch.arange(nd, device=relative_position_bias_global.device)[:, None]
+                    j = torch.arange(ns, device=relative_position_bias_global.device)
+                    causal_mask = i >= j - ns + nd
+                    relative_position_bias_global[:, :] += torch.where(causal_mask, 0.0, -1e10)
+
+                if relative_position_bias_global.shape[0] < b:
+                    relative_position_bias_global = relative_position_bias_global.expand(
+                        b // relative_position_bias_global.shape[0], *([-1] * (relative_position_bias_global.dim() - 1))
+                    )
 
                 global_token_context = self.attn_fn(
-                    query_layer=global_q.transpose(0, 1),
-                    key_layer=global_k.transpose(0, 1),
-                    value_layer=global_v.transpose(0, 1),
+                    query_layer=global_q,
+                    key_layer=global_k,
+                    value_layer=global_v,
                     attention_mask=None,
                     attention_bias=relative_position_bias_global,
-                ).transpose(0, 2)
+                )
 
                 context_layer.scatter_(
                     2,
@@ -1331,7 +1333,7 @@ class CoreAttention(MegatronModule):
                     local_context=self.local_context,
                     global_block_size=self.global_block_size,
                     global_segment_pos_idx=(self.use_long_attention == 'longt5_relative'),
-                    causal=True
+                    causal=True,
                 )
 
                 relative_position_bias += torch.where(relative_position > 0, -1e10, 0)
