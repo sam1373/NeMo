@@ -1008,11 +1008,12 @@ class CoreAttention(MegatronModule):
                 if relative_position_bias_global is None:
                     relative_position_bias_global = torch.zeros(1, self.num_attention_heads_per_partition, global_q.shape[0], global_k.shape[0], device=global_q.device)
 
-                relative_position_bias_global = relative_position_bias_global[
-                    :,
-                    self.num_attention_heads_partition_offset : self.num_attention_heads_partition_offset
-                    + self.num_attention_heads_per_partition,
-                ]
+                else:
+                    relative_position_bias_global = relative_position_bias_global[
+                        :,
+                        self.num_attention_heads_partition_offset : self.num_attention_heads_partition_offset
+                        + self.num_attention_heads_per_partition,
+                    ]
 
                 if causal:
                     nd, ns = relative_position_bias_global.shape[-2:]
