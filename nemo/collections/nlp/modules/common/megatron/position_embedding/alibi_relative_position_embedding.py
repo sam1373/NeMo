@@ -132,11 +132,17 @@ class ALiBiRelativePositionEmbedding(torch.nn.Module):
         relative_position = relative_position[:, -query_seq_length:, -key_seq_length:]
         # if not bidirectional, mask out the future positions
 
+        if torch.cuda.is_available():
+            relative_position = relative_position.to(torch.cuda.current_device())
+
         # shape (1, num_heads, query_length, key_length)
         return -relative_position.unsqueeze(0) * self.slopes
 
     def get_bias(self, relative_position):
 
         relative_position = relative_position.unsqueeze(1).expand(-1, self.num_attention_heads, -1, -1).abs()
+
+        if torch.cuda.is_available():
+            relative_position = relative_position.to(torch.cuda.current_device())
 
         return -relative_position * self.slopes
