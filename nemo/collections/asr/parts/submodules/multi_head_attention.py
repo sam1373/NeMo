@@ -42,6 +42,33 @@ import torch.nn.functional as F
 
 from nemo.utils import avoid_float16_autocast_context
 
+try:
+    from flash_attn.bert_padding import pad_input, unpad_input
+    from flash_attn.flash_attn_interface import flash_attn_unpadded_func
+    from flash_attn.flash_attn_triton import flash_attn_func
+
+except (ImportError, ModuleNotFoundError):
+    logging.warning(
+        "flash_attn was not found. Please see the installation instructions: https://github.com/HazyResearch/flash-attention."
+        "If you use flash_attn with triton. Please install triton==2.0.0.dev20221202."
+    )
+    flash_attn_unpadded_func, flash_attn_func = None, None
+    unpad_input, pad_input = None, None
+
+try:
+    from apex._autocast_utils import _cast_if_autocast_enabled
+    from apex.transformer.enums import AttnMaskType, AttnType
+    from apex.transformer.utils import divide as safe_divide
+
+    HAVE_APEX = True
+
+except (ImportError, ModuleNotFoundError):
+
+    HAVE_APEX = False
+
+from nemo.collections.nlp.modules.common.megatron.position_embedding.rotary_position_embedding import apply_rotary_pos_emb
+
+
 __all__ = [
     'RelPositionMultiHeadAttention',
     'RelPositionalEncoding',
@@ -57,7 +84,7 @@ class MultiHeadAttention(nn.Module):
         dropout_rate (float): dropout rate
     """
 
-    def __init__(self, n_head, n_feat, dropout_rate, max_cache_len=0):
+    def __init__(self, n_head, n_feat, dropout_rate, max_cache_len=0, use_flash_attention=False, self_attention_model="abs_pos"):
         """Construct an MultiHeadedAttention object."""
         super(MultiHeadAttention, self).__init__()
         self.cache_drop_size = None
@@ -75,7 +102,10 @@ class MultiHeadAttention(nn.Module):
         self._max_cache_len = max_cache_len
         self._cache_id = None
 
-    def forward_qkv(self, query, key, value):
+        self.use_flash_attention = use_flash_attention
+        self.self_attention_model = self_attention_model
+
+    def forward_qkv(self, query, key, value, head_first=True):
         """Transforms query, key and value.
         Args:
             query (torch.Tensor): (batch, time1, size)
@@ -90,9 +120,11 @@ class MultiHeadAttention(nn.Module):
         q = self.linear_q(query).view(n_batch, -1, self.h, self.d_k)
         k = self.linear_k(key).view(n_batch, -1, self.h, self.d_k)
         v = self.linear_v(value).view(n_batch, -1, self.h, self.d_k)
-        q = q.transpose(1, 2)
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
+
+        if head_first:
+            q = q.transpose(1, 2)
+            k = k.transpose(1, 2)
+            v = v.transpose(1, 2)
 
         return q, k, v
 
@@ -120,6 +152,7 @@ class MultiHeadAttention(nn.Module):
         return self.linear_out(x)  # (batch, time1, d_model)
 
     def forward(self, query, key, value, mask, pos_emb=None, cache=None, cache_next=None):
+        #add rel pos bias here?
         """Compute 'Scaled Dot Product Attention'.
         Args:
             query (torch.Tensor): (batch, time1, size)
@@ -134,14 +167,45 @@ class MultiHeadAttention(nn.Module):
         """
         key, value, query = self.update_cache(key=key, value=value, query=query, cache=cache, cache_next=cache_next)
 
-        if torch.is_autocast_enabled():
-            query, key, value = query.to(torch.float32), key.to(torch.float32), value.to(torch.float32)
+        if not self.use_flash_attention:
+            if torch.is_autocast_enabled():
+                query, key, value = query.to(torch.float32), key.to(torch.float32), value.to(torch.float32)
 
-        # temporary until we solve this more gracefully
-        with avoid_float16_autocast_context():
-            q, k, v = self.forward_qkv(query, key, value)
-            scores = torch.matmul(q, k.transpose(-2, -1)) / self.s_d_k
-            out = self.forward_attention(v, scores, mask)
+            # temporary until we solve this more gracefully
+            with avoid_float16_autocast_context():
+                q, k, v = self.forward_qkv(query, key, value)
+                if self.self_attention_model == "rope":
+                    q = q.transpose(0, 2)
+                    k = k.transpose(0, 2)
+
+                    q = apply_rotary_pos_emb(q, pos_emb)
+                    k = apply_rotary_pos_emb(k, pos_emb)
+
+                    q = q.transpose(0, 2)
+                    k = k.transpose(0, 2)
+
+                scores = torch.matmul(q, k.transpose(-2, -1)) / self.s_d_k
+                out = self.forward_attention(v, scores, mask)
+
+        else:
+
+            q, k, v = self.forward_qkv(query, key, value, head_first=False)
+
+            (q, k, v, mask) = _cast_if_autocast_enabled(
+                q, k, v, mask,
+            )
+            if self.self_attention_model == "rope":
+                q = q.transpose(0, 1)
+                k = k.transpose(0, 1)
+
+                q = apply_rotary_pos_emb(q, pos_emb)
+                k = apply_rotary_pos_emb(k, pos_emb)
+
+                q = q.transpose(0, 1)
+                k = k.transpose(0, 1)
+
+            out = self.flash_attention(q, k, v, mask)
+            out = out.reshape(out.shape[0], out.shape[1], -1)
 
         return out
 
@@ -153,6 +217,44 @@ class MultiHeadAttention(nn.Module):
                 cache_next[self._cache_id, :, :-q_keep_size, :] = cache[self._cache_id, :, q_keep_size:, :]
                 cache_next[self._cache_id, :, -q_keep_size:, :] = query[:, :q_keep_size, :]
         return key, value, query
+
+    def flash_attention(self, query_layer, key_layer, value_layer, attention_mask):
+        batch_size, seqlen, nheads, _ = query_layer.shape
+
+        if attention_mask is not None:
+            # [b, 1, sq, sk] -> [b, sq] / [b, sk]
+            # True: not attend / False: attend -> True: attend / False: not attend
+            attention_mask_q = torch.any(torch.eq(attention_mask, False), dim=3).squeeze(1)
+            attention_mask_kv = torch.any(torch.eq(attention_mask, False), dim=2).squeeze(1)
+        else:
+            attention_mask_q = torch.ones(
+                batch_size, query_layer.shape[1], dtype=torch.bool, device=torch.cuda.current_device()
+            )
+            attention_mask_kv = torch.ones(
+                batch_size, key_layer.shape[1], dtype=torch.bool, device=torch.cuda.current_device()
+            )
+
+        q, indices_q, cu_seqlens_q, max_seqlen_q = unpad_input(query_layer, attention_mask_q)
+        k, _, cu_seqlens_k, max_seqlen_k = unpad_input(key_layer, attention_mask_kv)
+        v, _, _, _ = unpad_input(value_layer, attention_mask_kv)
+        context_layer = flash_attn_unpadded_func(
+            q,
+            k,
+            v,
+            cu_seqlens_q,
+            cu_seqlens_k,
+            max_seqlen_q,
+            max_seqlen_k,
+            dropout_p=0.0,
+            causal=False,
+        )
+
+        # [b, sq, np, hn]
+        context_layer = pad_input(context_layer, indices_q, batch_size, seqlen)
+
+        # [b, sq, np, hn] -> [b, np, sq, hn]
+        #context_layer = context_layer.permute(0, 2, 1, 3)
+        return context_layer
 
 
 class RelPositionMultiHeadAttention(MultiHeadAttention):
@@ -997,3 +1099,6 @@ class LocalAttRelPositionalEncoding(PositionalEncoding):
         if self.dropout_emb:
             pos_emb = self.dropout_emb(pos_emb)
         return self.dropout(x), pos_emb
+
+
+

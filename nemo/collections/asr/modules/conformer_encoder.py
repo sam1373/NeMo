@@ -47,6 +47,14 @@ from nemo.core.classes.mixins import AccessMixin, adapter_mixins
 from nemo.core.classes.module import NeuralModule
 from nemo.core.neural_types import AcousticEncodedRepresentation, ChannelType, LengthsType, NeuralType, SpectrogramType
 
+from nemo.collections.nlp.modules.common.megatron.layer_type import LayerType
+
+from nemo.collections.nlp.modules.common.megatron.position_embedding.alibi_relative_position_embedding import (
+    ALiBiRelativePositionEmbedding,
+)
+
+from nemo.collections.nlp.modules.common.megatron.position_embedding.rotary_position_embedding import RotaryEmbedding
+
 __all__ = ['ConformerEncoder']
 
 
@@ -82,6 +90,7 @@ class ConformerEncoder(NeuralModule, StreamingEncoder, Exportable, AccessMixin):
             'rel_pos_local_attn': relative positional embedding and Transformer-XL with local attention using
                 overlapping chunks. Attention context is determined by att_context_size parameter.
             'abs_pos': absolute positional embedding and Transformer
+            'rope'
             Default is rel_pos.
         pos_emb_max_len (int): the maximum length of positional embeddings
             Defaults to 5000
@@ -270,6 +279,7 @@ class ConformerEncoder(NeuralModule, StreamingEncoder, Exportable, AccessMixin):
         global_tokens: int = 0,
         global_tokens_spacing: int = 1,
         global_attn_separate: bool = False,
+        use_flash_attention: bool = False,
     ):
         super().__init__()
         d_ff = d_model * ff_expansion_factor
@@ -284,6 +294,8 @@ class ConformerEncoder(NeuralModule, StreamingEncoder, Exportable, AccessMixin):
         self.global_tokens = global_tokens
         self.global_attn_separate = global_attn_separate
         self.global_tokens_spacing = global_tokens_spacing
+
+        self.use_flash_attention = use_flash_attention
 
         if att_context_size:
             self.att_context_size = list(att_context_size)
@@ -406,10 +418,23 @@ class ConformerEncoder(NeuralModule, StreamingEncoder, Exportable, AccessMixin):
                 dropout_rate_emb=dropout_emb,
             )
         elif self_attention_model == "abs_pos":
-            pos_bias_u = None
-            pos_bias_v = None
             self.pos_enc = PositionalEncoding(
                 d_model=d_model, dropout_rate=dropout_pre_encoder, max_len=pos_emb_max_len, xscale=self.xscale
+            )
+        elif self_attention_model == "rope":
+            rotary_dim = d_model // n_heads
+            rotary_percentage = 1.0 # for now
+            assert 0 < rotary_percentage <= 1
+            if rotary_percentage < 1:
+                rotary_dim = int(rotary_dim * rotary_percentage)
+            self.pos_enc = RotaryEmbedding(rotary_dim)
+        elif self_attention_model == "alibi":
+            self.pos_enc = ALiBiRelativePositionEmbedding(
+                bidirectional=True,
+                num_attention_heads=n_heads,
+                layer_type=LayerType.encoder,
+                num_attention_heads_alibi=None,
+                max_seq_len=pos_emb_max_len,
             )
         else:
             raise ValueError(f"Not valid self_attention_model: '{self_attention_model}'!")
@@ -432,6 +457,7 @@ class ConformerEncoder(NeuralModule, StreamingEncoder, Exportable, AccessMixin):
                 pos_bias_u=pos_bias_u,
                 pos_bias_v=pos_bias_v,
                 att_context_size=self.att_context_size,
+                use_flash_attention=self.use_flash_attention
             )
             self.layers.append(layer)
 
@@ -473,9 +499,11 @@ class ConformerEncoder(NeuralModule, StreamingEncoder, Exportable, AccessMixin):
         """
         self.max_audio_length = max_audio_length
         device = next(self.parameters()).device
-        self.pos_enc.extend_pe(max_audio_length, device)
 
-        if self.self_attention_model != "rel_pos_local_attn":
+        if self.self_attention_model != "rope":
+            self.pos_enc.extend_pe(max_audio_length, device)
+
+        if self.self_attention_model != "rel_pos_local_attn" and self.self_attention_model != "rope":
             att_mask = torch.ones(1, max_audio_length, max_audio_length, dtype=torch.bool, device=device)
             if self.chunk_size is None:
                 if self.att_context_size[0] >= 0:
@@ -603,6 +631,8 @@ class ConformerEncoder(NeuralModule, StreamingEncoder, Exportable, AccessMixin):
 
         if self.self_attention_model == 'abs_pos':
             audio_signal, pos_emb = self.pos_enc(x=audio_signal)
+        elif self.self_attention_model == 'rope':
+            pos_emb = self.pos_enc(max_audio_length, offset=cache_len)
         else:
             audio_signal, pos_emb = self.pos_enc(x=audio_signal, cache_len=cache_len)
 

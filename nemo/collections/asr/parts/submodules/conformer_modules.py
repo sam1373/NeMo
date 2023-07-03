@@ -75,6 +75,7 @@ class ConformerLayer(torch.nn.Module, AdapterModuleMixin, AccessMixin):
         pos_bias_u=None,
         pos_bias_v=None,
         att_context_size=[-1, -1],
+        use_flash_attention=False,
     ):
         super(ConformerLayer, self).__init__()
 
@@ -121,9 +122,10 @@ class ConformerLayer(torch.nn.Module, AdapterModuleMixin, AccessMixin):
                 global_tokens_spacing=global_tokens_spacing,
                 global_attn_separate=global_attn_separate,
             )
-        elif self_attention_model == 'abs_pos':
+        elif self_attention_model == 'abs_pos' or self_attention_model == 'rope':
             self.self_attn = MultiHeadAttention(
-                n_head=n_heads, n_feat=d_model, dropout_rate=dropout_att, max_cache_len=MHA_max_cache_len
+                n_head=n_heads, n_feat=d_model, dropout_rate=dropout_att, max_cache_len=MHA_max_cache_len,
+                self_attention_model=self_attention_model, use_flash_attention=use_flash_attention
             )
         else:
             raise ValueError(
@@ -188,9 +190,9 @@ class ConformerLayer(torch.nn.Module, AdapterModuleMixin, AccessMixin):
                 cache=cache_last_channel,
                 cache_next=cache_last_channel_next,
             )
-        elif self.self_attention_model == 'abs_pos':
+        elif self.self_attention_model == 'abs_pos' or self.self_attention_model == 'rope':
             x = self.self_attn(
-                query=x, key=x, value=x, mask=att_mask, cache=cache_last_channel, cache_next=cache_last_channel_next
+                query=x, key=x, value=x, mask=att_mask, cache=cache_last_channel, cache_next=cache_last_channel_next, pos_emb=pos_emb
             )
         else:
             x = None
