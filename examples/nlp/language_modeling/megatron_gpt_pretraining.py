@@ -44,20 +44,12 @@ def _modify_config(gpt_cfg, cfg, add_cfg_to_tree=False):
     OmegaConf.resolve(cfg)
     with open_dict(gpt_cfg):
         gpt_cfg.megatron_amp_O2 = cfg.model.get('megatron_amp_O2', False)
-        gpt_cfg.micro_batch_size = cfg.model.data.train_ds.micro_batch_size
-        gpt_cfg.global_batch_size = cfg.model.data.train_ds.global_batch_size
+        gpt_cfg.micro_batch_size = cfg.model.micro_batch_size
+        gpt_cfg.global_batch_size = cfg.model.global_batch_size
         gpt_cfg.sequence_parallel = cfg.model.get("sequence_parallel", False)
         gpt_cfg.activations_checkpoint_granularity = cfg.model.get("activations_checkpoint_granularity", None)
         gpt_cfg.activations_checkpoint_num_layers = cfg.model.get("activations_checkpoint_num_layers", None)
         gpt_cfg.activations_checkpoint_method = cfg.model.get("activations_checkpoint_method", None)
-        gpt_cfg.data = cfg.model.data
-        gpt_cfg.optim = cfg.model.optim
-        gpt_cfg.precision = cfg.trainer.precision
-        gpt_cfg.answer_only_loss = cfg.model.answer_only_loss
-        gpt_cfg.restore_from_path = cfg.model.restore_from_path
-        gpt_cfg.resume_from_checkpoint = cfg.model.resume_from_checkpoint
-        gpt_cfg.save_nemo_on_validation_end = cfg.model.save_nemo_on_validation_end
-        gpt_cfg.gradient_as_bucket_view = cfg.model.gradient_as_bucket_view
         gpt_cfg.hidden_dropout = cfg.model.get('hidden_dropout', 0.0)
         gpt_cfg.attention_dropout = cfg.model.get('attention_dropout', 0.0)
         gpt_cfg.ffn_dropout = cfg.model.ffn_dropout
