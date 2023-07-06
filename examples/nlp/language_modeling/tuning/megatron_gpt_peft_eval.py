@@ -128,6 +128,12 @@ def main(cfg) -> None:
         peft_model_cfg.activations_checkpoint_granularity = None
         peft_model_cfg.activations_checkpoint_method = None
 
+        if 'use_flash_attention' in cfg.model:
+            peft_model_cfg.use_flash_attention = cfg.model.use_flash_attention
+
+        if 'use_long_attention' in cfg.model:
+            peft_model_cfg.use_long_attention = cfg.model.use_long_attention
+
     with open_dict(cfg):
         # update the config with the trained model config
         # required for hydra interpolation to work inside cfg.inference
