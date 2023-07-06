@@ -135,7 +135,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         gradient_accumulation_fusion=False,
         normalize_attention_scores=True,
         use_flash_attention=False,
-        use_long_attention=None,  # None / local_only / global / tglobal / global_to_global / global_sep?
+        use_long_attention=None,  # None / local_only / global / tglobal / global_to_global / global_limited
         local_context=128,
         global_block_size=16,
     ):
@@ -224,7 +224,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                 gradient_accumulation_fusion=gradient_accumulation_fusion,
             )
 
-        if use_long_attention == "tglobal":
+        if use_long_attention == "tglobal" or use_long_attention == "global_norm":
             self.global_norm = MixedFusedRMSNorm(hidden_size, eps=1e-6)
 
         self.core_attention = CoreAttention(
@@ -453,6 +453,11 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
             global_hidden_states = global_hidden_states.sum(dim=1)
             global_hidden_states = self.global_norm(global_hidden_states)
             hidden_states = torch.cat((hidden_states, global_hidden_states), dim=0)
+        elif self.use_long_attention == "global_norm":
+            global_hidden_states = hidden_states[global_pos_idx]
+            global_hidden_states = self.global_norm(global_hidden_states)
+            hidden_states = torch.cat((hidden_states, global_hidden_states), dim=0)
+
 
         if global_pos_idx is not None:
             global_pos_idx = global_pos_idx[None, :].expand(hidden_states.shape[1], -1)
@@ -996,7 +1001,7 @@ class CoreAttention(MegatronModule):
                 context_layer = context_layer[:, :, self.local_context :]
 
             sq_true = sq
-            if use_long_attention == "tglobal":
+            if use_long_attention == "tglobal" or use_long_attention == "global_norm":
                 sq_true -= global_pos_idx.shape[1]
             nb = (sq_true + self.local_context - 1) // self.local_context
             context_layer = rearrange(context_layer, '(b nb) np sq hn -> b np (nb sq) hn', nb=nb)
@@ -1220,16 +1225,13 @@ class CoreAttention(MegatronModule):
         causal,
     ):
 
-        if attention_mask is None:
-            attention_mask = torch.zeros(
-                query_layer.shape[1], query_layer.shape[0], device=torch.cuda.current_device()
-            ).to(dtype=torch.bool)
+
 
         # ==================================================
         # Update query_layer, key_layer, value_layer
         # ==================================================
         if global_pos_idx is not None:
-            if self.use_long_attention == "tglobal":
+            if self.use_long_attention == "tglobal" or self.use_long_attention == "global_norm":
 
                 total_transient_tokens = global_pos_idx.shape[1]
 
@@ -1269,6 +1271,11 @@ class CoreAttention(MegatronModule):
 
                 # [b, nh, sq/k, np]
 
+        if attention_mask is None:
+            attention_mask = torch.zeros(
+                query_layer.shape[1], query_layer.shape[0], device=torch.cuda.current_device()
+            ).to(dtype=torch.bool)
+
         # [sq/k, b, np, hn] -> [b, hn, sq/k, np]
         query_layer = query_layer.permute(1, 2, 0, 3)
         key_layer = key_layer.permute(1, 2, 0, 3)
@@ -1285,18 +1292,31 @@ class CoreAttention(MegatronModule):
         key_layer = _concatenate_n_blocks(key_layer, block_dim=2, sequence_dim=3, concat_num=3 - causal)
         value_layer = _concatenate_n_blocks(value_layer, block_dim=2, sequence_dim=3, concat_num=3 - causal)
 
-        if global_pos_idx is not None and not global_attn_separate:
-            # Tile side inputs across local key/value blocks
-            # New shape: (batch_size, n_heads, num_blocks, global_seq_len, dim_per_head)
-            reps = [1] * (side_k.ndim + 1)
-            reps[2] = key_layer.shape[2]
-            side_k = side_k.unsqueeze(2).repeat(reps)
-            side_v = side_v.unsqueeze(2).repeat(reps)
+        if global_pos_idx is not None:
+            if self.use_long_attention == "global_limited":
+                #TODO: should have a separate parameter for number of limited global tokens
+                global_tokens_limit = self.local_context
 
-            # Concatenate "local" and "side"/"global" key/value states
-            # New shape: (batch_size, n_heads, num_blocks, 3 * block_len + global_seq_len, dim_per_head)
-            key_layer = torch.cat([key_layer, side_k], dim=3)
-            value_layer = torch.cat([value_layer, side_v], dim=3)
+                side_unfold = torch.nn.Unfold(kernel_size=(1, global_tokens_limit), stride=(1, self.local_context // self.global_block_size))
+
+                side_k_blocks = side_unfold(side_k.transpose(-2, -1)).transpose(-2, -1)
+                #side_k_blocks = side_unfold(F.pad(side_k, (0, 0, global_tokens_limit, 0)))
+                #side_v_blocks = side_unfold(F.pad(side_v, (0, 0, global_tokens_limit, 0)))
+
+                key_layer = torch.cat([key_layer, side_k_blocks], dim=3)
+                value_layer = torch.cat([value_layer, side_v_blocks], dim=3)
+            elif not global_attn_separate:
+                # Tile side inputs across local key/value blocks
+                # New shape: (batch_size, n_heads, num_blocks, global_seq_len, dim_per_head)
+                reps = [1] * (side_k.ndim + 1)
+                reps[2] = key_layer.shape[2]
+                side_k = side_k.unsqueeze(2).repeat(reps)
+                side_v = side_v.unsqueeze(2).repeat(reps)
+
+                # Concatenate "local" and "side"/"global" key/value states
+                # New shape: (batch_size, n_heads, num_blocks, 3 * block_len + global_seq_len, dim_per_head)
+                key_layer = torch.cat([key_layer, side_k], dim=3)
+                value_layer = torch.cat([value_layer, side_v], dim=3)
 
         # ==================================================
         # Update attention_mask, attention_bias
