@@ -829,7 +829,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
 
                 if global_attn_separate:
                     relative_position_local, global_tokens = build_rel_pos_long_attention(
-                        seq_length=enc_seq_length,
+                        seq_length=encoder_input.size(0),
                         use_long_attention="local_only",
                         local_context=self.local_context,
                         global_block_size=self.global_block_size,
@@ -852,7 +852,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
                     )
                 else:
                     relative_position, global_tokens = build_rel_pos_long_attention(
-                        seq_length=enc_seq_length,
+                        seq_length=encoder_input.size(0),
                         use_long_attention=self.use_long_attention,
                         local_context=self.local_context,
                         global_block_size=self.global_block_size,
