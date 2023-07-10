@@ -58,6 +58,7 @@ model:
   # of each chunk at the specified granularity
   # 'block' checkpoints the specified number of layers per pipeline stage at the specified granularity
   activations_checkpoint_num_layers: null # not used with 'selective'
+  activations_checkpoint_layers_per_pipeline: null
   answer_only_loss: False # not used right now
   gradient_as_bucket_view: False
 
@@ -69,7 +70,7 @@ model:
     chat: False # whether use chatbot data or not
     train_ds:
       # Example of how to specify paths to multiple datasets
-      # file_names: 
+      # file_names:
       #   - /path/to/squad.jsonl
       #   - /path/to/mnli.jsonl
       #   - /path/to/boolq.jsonl
@@ -122,6 +123,7 @@ model:
       truncation_field: "context" # Options: ['context', 'answer']
       index_mapping_dir: null # Path to a directory to write index mapping files.
       prompt_template: ${model.data.train_ds.prompt_template} # fstring to use for assistant prompt. Example: "Q: {input}\nA: {output}"
+      tokens_to_generate: ???
 
       metric:
         name: "loss" # Name of the evaluation metric to use. Options: ['exact_string_match', 'loss']
