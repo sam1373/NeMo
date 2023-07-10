@@ -50,7 +50,21 @@ def _modify_config(gpt_cfg, cfg, add_cfg_to_tree=False):
         gpt_cfg.activations_checkpoint_granularity = cfg.model.get("activations_checkpoint_granularity", None)
         gpt_cfg.activations_checkpoint_num_layers = cfg.model.get("activations_checkpoint_num_layers", None)
         gpt_cfg.activations_checkpoint_method = cfg.model.get("activations_checkpoint_method", None)
+        gpt_cfg.activations_checkpoint_layers_per_pipeline = cfg.model.get(
+            "activations_checkpoint_layers_per_pipeline", None
+        )
         gpt_cfg.data = cfg.model.data
+        # Check dataset max_seq_legnth and max_position_embeddings size
+        max_seq_length = max(cfg.model.data.train_ds.max_seq_length, cfg.model.data.validation_ds.max_seq_length)
+        if (
+            gpt_cfg.get('position_embedding_type', None) in [None, 'learned_absolute']
+            and max_seq_length > gpt_cfg.max_position_embeddings
+        ):
+            logging.warning(
+                f"Set dataset max_seq_length to max_position_embeddings {gpt_cfg.max_position_embeddings} if using learned_absolute position embedding"
+            )
+            gpt_cfg.data.train_ds.max_seq_length = gpt_cfg.max_position_embeddings
+            gpt_cfg.data.validation_ds.max_seq_length = gpt_cfg.max_position_embeddings
         gpt_cfg.optim = cfg.model.optim
         gpt_cfg.precision = cfg.trainer.precision
         gpt_cfg.answer_only_loss = cfg.model.answer_only_loss
@@ -95,7 +109,6 @@ def load_from_nemo(cls, cfg, trainer, gpt_cfg, modify_confg_fn):
         trainer=trainer,
         override_config_path=gpt_cfg,
         save_restore_connector=save_restore_connector,
-        strict=False
     )
     return model
 
@@ -201,6 +214,10 @@ def main(cfg) -> None:
     else:
         validate_checkpoint_loading_args(cfg.model.pretrained_checkpoint)
         model = load_from_checkpoint_dir(MegatronGPTSFTModel, cfg, trainer, modify_confg_fn=_modify_config)
+
+    if 'inference' in cfg:
+        config = OmegaConf.to_container(cfg.inference, resolve=True)
+        model.set_inference_config(config)
 
     trainer.fit(model)
 
