@@ -13,6 +13,9 @@
 # limitations under the License.
 
 import logging
+import re
+import string
+from collections import Counter
 from typing import List
 
 import torch
@@ -205,8 +208,6 @@ class ExactStringMatchMetric(Metric):
 
     def compute(self):
         return self.correct.float() / self.total
-
-
 
 
 class TokenF1Score(Metric):
