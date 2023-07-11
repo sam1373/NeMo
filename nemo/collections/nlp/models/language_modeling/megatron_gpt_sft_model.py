@@ -93,9 +93,8 @@ class MegatronGPTSFTModel(MegatronGPTModel):
         else:
             base_module = self.model
 
-        self.original_checkpointing_granularity = base_module.language_model.encoder.activations_checkpoint_granularity
-        self.original_checkpointing_num_layers = base_module.language_model.encoder.activations_checkpoint_num_layers
-        self.original_checkpointing_method = base_module.language_model.encoder.activations_checkpoint_method
+        self._reset_activation_checkpointing_args()
+        self._reset_sequence_parallelism_args()
         self.virtual_tokens = 0
 
     def setup_metric(self, data_cfg):
@@ -375,23 +374,12 @@ class MegatronGPTSFTModel(MegatronGPTModel):
         self._inference_config['tokens_to_generate'] = data_cfg.get('tokens_to_generate')
         output = self.predict_step(batch, batch_idx, dataloader_idx)
 
-        bos = 1 if data_cfg.add_bos else 0
-        sep = 1 if data_cfg.add_sep else 0
-        eos = 1 if data_cfg.add_eos else 0
-
-        # tokens: [BOS, contexts, SEP, answers, EOS]
-        # contexts: [BOS, contexts, SEP]
-        inputs_text = [
-            self.tokenizer.ids_to_text(t[bos : l.item() - sep].tolist())
-            for t, l in zip(batch['contexts'], batch['context_lengths'])
-        ]
-        labels_text = [
-            self.tokenizer.ids_to_text(t[l.item() :].tolist())
-            for t, l in zip(batch['tokens'], batch['context_lengths'])
-        ]
+        inputs_text = [self.tokenizer.ids_to_text(c.tolist()) for c in batch['contexts']]
+        labels_text = [self.tokenizer.ids_to_text(a.tolist()) for a in batch['answers']]
         preds_text = [
             self.tokenizer.ids_to_text(t[l.item() :]) for t, l in zip(output['token_ids'], batch['context_lengths'])
         ]
+
         return {
             'loss': loss,
             'preds': preds_text,  # [str]
@@ -540,7 +528,8 @@ class MegatronGPTSFTModel(MegatronGPTModel):
             return generate(self, **inference_config)
 
     def write_predictions_to_file(self, outputs, output_file_path_prefix):
-        with open(output_file_path_prefix + "_inputs_preds_labels.jsonl", "w") as f_json:
+        output_file_path = output_file_path_prefix + "_inputs_preds_labels.jsonl"
+        with open(output_file_path, "w") as f_json:
             assert (
                 len(outputs['inputs']) == len(outputs['preds']) == len(outputs['labels']) == len(outputs['metadata'])
             )
@@ -550,6 +539,8 @@ class MegatronGPTSFTModel(MegatronGPTModel):
                     if k not in json_string:
                         json_string[k] = v
                 f_json.write(json.dumps(json_string) + '\n')
+
+        logging.info(f'Predictions saved to {output_file_path}')
 
     def cast_for_metric(self, pred, label, metric_name, class_labels=None, labels_are_strings=False):
         if metric_name == 'exact_string_match' or 'rouge' in metric_name:
@@ -679,8 +670,8 @@ class MegatronGPTSFTModel(MegatronGPTModel):
         return dataloaders
 
     def on_validation_epoch_start(self):
-        super()._reset_activation_checkpointing_args()
-        super()._reset_sequence_parallelism_args()
+        self._reset_activation_checkpointing_args()
+        self._reset_sequence_parallelism_args()
         app_state = AppState()
         _reconfigure_microbatch_calculator(
             rank=app_state.global_rank,
@@ -692,8 +683,8 @@ class MegatronGPTSFTModel(MegatronGPTModel):
         return super().on_validation_epoch_start()
 
     def on_test_epoch_start(self):
-        super()._reset_activation_checkpointing_args()
-        super()._reset_sequence_parallelism_args()
+        self._reset_activation_checkpointing_args()
+        self._reset_sequence_parallelism_args()
         app_state = AppState()
         _reconfigure_microbatch_calculator(
             rank=app_state.global_rank,
@@ -714,8 +705,8 @@ class MegatronGPTSFTModel(MegatronGPTModel):
 
     def on_inference_epoch_end(self, ds):
         app_state = AppState()
-        super()._restore_activation_checkpointing_args()
-        super()._restore_sequence_parallelism_args()
+        self._restore_activation_checkpointing_args()
+        self._restore_sequence_parallelism_args()
         if hasattr(self, "_train_ds"):
             _reconfigure_microbatch_calculator(
                 rank=app_state.global_rank,
