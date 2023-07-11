@@ -38,11 +38,11 @@ class GPTSFTDataset(Dataset):
         seed: int = 1234,
         context_key: str = "text",
         label_key: str = "answer",
+        query_key: str = None,
         separate_prompt_and_response_with_newline: bool = False,
         answer_only_loss: bool = True,
         truncation_field: str = "answer",
-        pad_to_max_length: bool = False,
-        # (@adithyare) allows for much faster training especially in PEFT settings.
+        pad_to_max_length: bool = False,  # (@adithyare) allows for much faster training especially in PEFT settings.
         index_mapping_dir: str = None,
         prompt_template: str = None,
         virtual_tokens: int = 0,
@@ -67,7 +67,7 @@ class GPTSFTDataset(Dataset):
         truncation_field: Field to use for truncation. (Options: "answer", "context"). Field to be used for truncation if the combined length exceeds the max sequence length.
         pad_to_max_length: Whether to pad the input to the max sequence length. If False, will pad to the max length of the current batch.
         index_mapping_dir: Directory to save the index mapping to. If None, will write to the same folder as the dataset.
-        prompt_template: Prompt template to inject via an fstring. Formatted like Q: {input}\n\nA: {output}
+        prompt_template: Prompt template to inject via an fstring. Formatted like Q: {context_key}\n\nA: {label_key}
         """
         self.tokenizer = tokenizer
         self.file_path = file_path
@@ -81,6 +81,7 @@ class GPTSFTDataset(Dataset):
         self.seed = seed
         self.context_key = context_key
         self.label_key = label_key
+        self.query_key = query_key
         self.separate_prompt_and_response_with_newline = separate_prompt_and_response_with_newline
         self.answer_only_loss = answer_only_loss
         self.truncation_field = truncation_field
@@ -100,6 +101,7 @@ class GPTSFTDataset(Dataset):
 
         # Will be None after this call if `max_num_samples` is None
         self._build_samples_mapping()
+        assert self.tokens_to_generate < self.max_seq_length
 
     def _build_samples_mapping(self):
         if self.max_num_samples is not None:
@@ -143,18 +145,34 @@ class GPTSFTDataset(Dataset):
 
     def _calculate_total_ids(self, example):
         context = example[self.context_key]
-        output = example[self.label_key]
+        label = example[self.label_key]
+        query = example[self.query_key] if self.query_key is not None else ""
+
         if self.prompt_template is not None:
-            assert '{input}' in self.prompt_template
-            assert '{output}' in self.prompt_template
-            assert self.prompt_template.index('{output}') == len(self.prompt_template) - len('{output}')
+            context_string = f'{{{self.context_key}}}'
+            label_string = f'{{{self.label_key}}}'
+            assert context_string in self.prompt_template, f'{context_string} must in {self.prompt_template}'
+            assert label_string in self.prompt_template, f'{label_string} must in {self.prompt_template}'
+            assert self.prompt_template.index(label_string) == len(self.prompt_template) - len(
+                label_string
+            ), f'{{self.label_key}} must be at the end of prompt_template.'
             original_context = context
-            context = self.prompt_template.replace('{input}', context).replace('{output}', '').strip(' ')
-            text = self.prompt_template.replace('{input}', original_context).replace('{output}', output)
+            context = self.prompt_template.replace(context_string, context).replace(label_string, '').strip(' ')
+            text = self.prompt_template.replace(context_string, original_context).replace(label_string, label)
+            if self.query_key is not None:
+                query_string = f'{{{self.query_key}}}'
+                assert query_string in self.prompt_template
+                context = context.replace(query_string, query)
+                text = text.replace(query_string, query)
+
         elif self.separate_prompt_and_response_with_newline:
-            text = context + '\n' + output
+            if self.query_key is not None:
+                context = context + '\n' + query
+            text = context + '\n' + label
         else:
-            text = context + ' ' + output
+            if self.query_key is not None:
+                context = context + ' ' + query
+            text = context + ' ' + label
 
         tokenized_text = self.tokenizer.text_to_ids(text)
         context_ids = self.tokenizer.text_to_ids(context)
@@ -165,10 +183,8 @@ class GPTSFTDataset(Dataset):
             + max(len(answer_ids), self.tokens_to_generate)
             + self.add_bos
             + self.add_sep
+            + self.add_eos
         )
-        # Only training need to consider eos token
-        if self.tokens_to_generate == 0:
-            total_ids += self.add_eos
 
         return total_ids
 
@@ -179,30 +195,50 @@ class GPTSFTDataset(Dataset):
         BOS, EOS, and SEP, are added if specified.
         """
         context = example[self.context_key]
-        output = example[self.label_key]
+        label = example[self.label_key]
+        query = example[self.query_key] if self.query_key is not None else ""
 
-        # TODO to make configurabel via config
-        TOKEN_START = "<extra_id_1>"
-        TOKEN_END = "<extra_id_2>"
-        context_idx = context.index(TOKEN_START)
-        question = TOKEN_START + context[:context_idx] + TOKEN_END
-        context_only = context[context_idx + len(TOKEN_START) :]
+        total_ids = self._calculate_total_ids(example)
+
+        if total_ids > self.max_seq_length:
+            truncation_length = total_ids - self.max_seq_length
+            if self.truncation_field == "answer":
+                answer_ids = self.tokenizer.text_to_ids(label)
+                assert len(answer_ids) >= truncation_length, 'answer is not long enough to truncate.'
+                answer_ids = answer_ids[: -min(truncation_length, len(answer_ids))]
+                label = self.tokenizer.ids_to_text(answer_ids)
+            elif self.truncation_field == "context":
+                context_ids = self.tokenizer.text_to_ids(context)
+                assert len(context_ids) >= truncation_length, 'context is not long enough to truncate.'
+                context_ids = context_ids[: -min(truncation_length, len(context_ids))]
+                context = self.tokenizer.ids_to_text(context_ids)
 
         if self.prompt_template is not None:
-            assert '{input}' in self.prompt_template
-            assert '{output}' in self.prompt_template
-            # Make sure that '{output}' always occurs at the end of the prompt template string
-            assert self.prompt_template.index('{output}') == len(self.prompt_template) - len('{output}')
-            # Get the context by replacing only the input
-            original_context = context
-            context = self.prompt_template.replace('{input}', context).replace('{output}', '').strip(' ')
-            # Replace the input and output placeholders with the actual input and output
-            text = self.prompt_template.replace('{input}', original_context).replace('{output}', output)
+            context_string = f'{{{self.context_key}}}'
+            label_string = f'{{{self.label_key}}}'
 
-        if self.separate_prompt_and_response_with_newline and self.prompt_template is None:
-            text = context + '\n' + output
-        elif not self.separate_prompt_and_response_with_newline and self.prompt_template is None:
-            text = context + ' ' + output
+            assert context_string in self.prompt_template, f'{context_string} must in {self.prompt_template}'
+            assert label_string in self.prompt_template, f'{label_string} must in {self.prompt_template}'
+            assert self.prompt_template.index(label_string) == len(self.prompt_template) - len(
+                label_string
+            ), f'{{self.label_key}} must be at the end of prompt_template.'
+            original_context = context
+            context = self.prompt_template.replace(context_string, context).replace(label_string, '').strip(' ')
+            text = self.prompt_template.replace(context_string, original_context).replace(label_string, label)
+            if self.query_key is not None:
+                query_string = f'{{{self.query_key}}}'
+                assert query_string in self.prompt_template
+                context = context.replace(query_string, query)
+                text = text.replace(query_string, query)
+
+        elif self.separate_prompt_and_response_with_newline:
+            if self.query_key is not None:
+                context = context + '\n' + query
+            text = context + '\n' + label
+        else:
+            if self.query_key is not None:
+                context = context + ' ' + query
+            text = context + ' ' + label
 
         if self.virtual_tokens:
             # (@adithyare) we are going to insert "pad/eos" tokens in the beginning of the text and context
@@ -214,44 +250,27 @@ class GPTSFTDataset(Dataset):
         tokenized_text = pre_pad + self.tokenizer.text_to_ids(text)
         context_ids = pre_pad + self.tokenizer.text_to_ids(context)
         answer_ids = tokenized_text[len(context_ids) :]
-        question_ids = self.tokenizer.text_to_ids(question)
-        context_ids_only = self.tokenizer.text_to_ids(context_only)
-        context_ids = pre_pad + context_ids_only
-        total_ids = len(context_ids) + len(question_ids) + max(len(answer_ids), self.tokens_to_generate)
-
-        if self.add_bos:
-            total_ids += 1
-        if self.add_sep:
-            total_ids += 1
-        if self.add_eos:
-            total_ids += 1
-
-        # If the total number of token is greater than the max, we will try to truncate the answer
-        if total_ids > self.max_seq_length:
-            truncation_length = total_ids - self.max_seq_length
-            if self.truncation_field == "answer":
-                answer_ids = answer_ids[: -min(truncation_length, len(answer_ids))]
-            elif self.truncation_field == "context":
-                context_ids = context_ids[: -min(truncation_length, len(context_ids))]
-
-        context_ids += question_ids
-
-        assert len(context_ids) <= self.max_seq_length
         input_ids = context_ids
 
         answer_start_idx = len(input_ids)
         # Adds sep token between text/prompt and answer
         if self.add_sep:
+            context_ids = context_ids + [self.sep_id]
             input_ids = input_ids + [self.sep_id]
             answer_start_idx += 1
 
         input_ids = input_ids + answer_ids
 
         if self.add_bos:
+            context_ids = [self.tokenizer.bos_id] + context_ids
             input_ids = [self.tokenizer.bos_id] + input_ids
             answer_start_idx += 1
+
+        # Only training need to consider eos token
         if self.add_eos:
             input_ids = input_ids + [self.tokenizer.eos_id]
+
+        assert len(input_ids) <= self.max_seq_length
 
         # store metadata in dataset
         metadata = {k: v for k, v in example.items() if k not in [self.context_key, self.label_key]}
@@ -316,6 +335,7 @@ class GPTSFTDataset(Dataset):
             max_length = self.max_seq_length
         else:
             max_length = min(self.max_seq_length, self._ceil_to_nearest(max_length, 8))
+
         assert max_length <= self.max_seq_length
 
         attention_mask = [self._create_attention_mask(max_length) for _ in batch]
