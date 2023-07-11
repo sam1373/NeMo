@@ -391,8 +391,8 @@ def model_inference_strategy_dispatcher(model, **args):
     if isinstance(model, MegatronGPTPromptLearningModel):
         return PromptLearningModelTextGenerationStrategy(model, **args)
     elif isinstance(model, MegatronGPTModel):
-        if model.cfg.get("use_long_attention", None) is not None:
-            return LimitedContextGPTModelTextGenerationStrategy(model)
+        #if model.cfg.get("use_long_attention", None) is not None:
+        #    return LimitedContextGPTModelTextGenerationStrategy(model)
         return GPTModelTextGenerationStrategy(model)
     elif isinstance(model, MegatronRetrievalModel):
         strategy_name = args['strategy']
