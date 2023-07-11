@@ -128,8 +128,8 @@ def main(cfg) -> None:
         max_seq_length = cfg.model.data.test_ds.max_seq_length
         # Check dataset max_seq_length and max_position_embeddings size
         if (
-                peft_model_cfg.get('position_embedding_type', None) in [None, 'learned_absolute']
-                and max_seq_length > peft_model_cfg.max_position_embeddings
+            peft_model_cfg.get('position_embedding_type', None) in [None, 'learned_absolute']
+            and max_seq_length > peft_model_cfg.max_position_embeddings
         ):
             logging.warning(
                 f"Set dataset max_seq_length to max_position_embeddings {peft_model_cfg.max_position_embeddings} if using learned_absolute position embedding"

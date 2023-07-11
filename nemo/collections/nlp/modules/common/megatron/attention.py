@@ -458,7 +458,6 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
             global_hidden_states = self.global_norm(global_hidden_states)
             hidden_states = torch.cat((hidden_states, global_hidden_states), dim=0)
 
-
         if global_pos_idx is not None:
             global_pos_idx = global_pos_idx[None, :].expand(hidden_states.shape[1], -1)
 
@@ -1011,7 +1010,13 @@ class CoreAttention(MegatronModule):
                 global_q, global_k, global_v = global_qkv
 
                 if relative_position_bias_global is None:
-                    relative_position_bias_global = torch.zeros(1, self.num_attention_heads_per_partition, global_q.shape[0], global_k.shape[0], device=global_q.device)
+                    relative_position_bias_global = torch.zeros(
+                        1,
+                        self.num_attention_heads_per_partition,
+                        global_q.shape[0],
+                        global_k.shape[0],
+                        device=global_q.device,
+                    )
 
                 else:
                     relative_position_bias_global = relative_position_bias_global[
@@ -1029,7 +1034,8 @@ class CoreAttention(MegatronModule):
 
                 if relative_position_bias_global.shape[0] < b:
                     relative_position_bias_global = relative_position_bias_global.expand(
-                        b // relative_position_bias_global.shape[0], *([-1] * (relative_position_bias_global.dim() - 1))
+                        b // relative_position_bias_global.shape[0],
+                        *([-1] * (relative_position_bias_global.dim() - 1)),
                     )
 
                 global_token_context = self.attn_fn(
@@ -1225,8 +1231,6 @@ class CoreAttention(MegatronModule):
         causal,
     ):
 
-
-
         # ==================================================
         # Update query_layer, key_layer, value_layer
         # ==================================================
@@ -1294,14 +1298,16 @@ class CoreAttention(MegatronModule):
 
         if global_pos_idx is not None:
             if self.use_long_attention == "global_limited":
-                #TODO: should have a separate parameter for number of limited global tokens
+                # TODO: should have a separate parameter for number of limited global tokens
                 global_tokens_limit = self.local_context
 
-                side_unfold = torch.nn.Unfold(kernel_size=(1, global_tokens_limit), stride=(1, self.local_context // self.global_block_size))
+                side_unfold = torch.nn.Unfold(
+                    kernel_size=(1, global_tokens_limit), stride=(1, self.local_context // self.global_block_size)
+                )
 
                 side_k_blocks = side_unfold(side_k.transpose(-2, -1)).transpose(-2, -1)
-                #side_k_blocks = side_unfold(F.pad(side_k, (0, 0, global_tokens_limit, 0)))
-                #side_v_blocks = side_unfold(F.pad(side_v, (0, 0, global_tokens_limit, 0)))
+                # side_k_blocks = side_unfold(F.pad(side_k, (0, 0, global_tokens_limit, 0)))
+                # side_v_blocks = side_unfold(F.pad(side_v, (0, 0, global_tokens_limit, 0)))
 
                 key_layer = torch.cat([key_layer, side_k_blocks], dim=3)
                 value_layer = torch.cat([value_layer, side_v_blocks], dim=3)
@@ -1345,6 +1351,7 @@ class CoreAttention(MegatronModule):
                 if not self.use_flash_attention:
                     relative_position_bias = torch.where(attention_mask, 0.0, -1e10)
             else:
+                relative_position_bias = relative_position_bias[..., :nb, :, :sk]
                 relative_position_bias = relative_position_bias + torch.where(attention_mask, 0.0, -1e10)
 
             if causal and not global_attn_separate:

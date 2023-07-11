@@ -810,6 +810,11 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
 
         rotary_pos_emb = None
         encoder_self_attention_relative_position_bias = None
+
+        use_long_attention = self.use_long_attention
+        if encoder_input.size(0) == 1:
+            use_long_attention = None
+
         if self.position_embedding_type == 'rope':
             rotary_pos_emb = self.rotary_pos_emb(enc_seq_length)
         elif (
@@ -819,7 +824,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
             or self.position_embedding_type == 'relative'
             or self.position_embedding_type == 'longt5_relative'
         ):
-            if not self.use_long_attention:
+            if not use_long_attention:
                 encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding(
                     query_seq_length=enc_seq_length, key_seq_length=enc_seq_length,
                 )
@@ -829,7 +834,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
 
                 if global_attn_separate:
                     relative_position_local, global_tokens = build_rel_pos_long_attention(
-                        seq_length=encoder_input.size(0),
+                        seq_length=enc_seq_length,
                         use_long_attention="local_only",
                         local_context=self.local_context,
                         global_block_size=self.global_block_size,
@@ -841,7 +846,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
                     ).transpose(0, 1)[None]
 
                     equal_spaced_global_tokens_num = (
-                        encoder_input.size(0) + self.global_block_size - 1
+                        enc_seq_length + self.global_block_size - 1
                     ) // self.global_block_size
                     relative_position_global_bias = self.encoder_relative_position_embedding(
                         query_seq_length=equal_spaced_global_tokens_num, key_seq_length=equal_spaced_global_tokens_num,
@@ -852,7 +857,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
                     )
                 else:
                     relative_position, global_tokens = build_rel_pos_long_attention(
-                        seq_length=encoder_input.size(0),
+                        seq_length=enc_seq_length,
                         use_long_attention=self.use_long_attention,
                         local_context=self.local_context,
                         global_block_size=self.global_block_size,

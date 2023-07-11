@@ -158,13 +158,13 @@ class GPTSFTDataset(Dataset):
 
         tokenized_text = self.tokenizer.text_to_ids(text)
         context_ids = self.tokenizer.text_to_ids(context)
-        answer_ids = tokenized_text[len(context_ids):]
+        answer_ids = tokenized_text[len(context_ids) :]
         total_ids = (
-                self.virtual_tokens
-                + len(context_ids)
-                + max(len(answer_ids), self.tokens_to_generate)
-                + self.add_bos
-                + self.add_sep
+            self.virtual_tokens
+            + len(context_ids)
+            + max(len(answer_ids), self.tokens_to_generate)
+            + self.add_bos
+            + self.add_sep
         )
         # Only training need to consider eos token
         if self.tokens_to_generate == 0:
@@ -186,7 +186,7 @@ class GPTSFTDataset(Dataset):
         TOKEN_END = "<extra_id_2>"
         context_idx = context.index(TOKEN_START)
         question = TOKEN_START + context[:context_idx] + TOKEN_END
-        context_only = context[context_idx + len(TOKEN_START):]
+        context_only = context[context_idx + len(TOKEN_START) :]
 
         if self.prompt_template is not None:
             assert '{input}' in self.prompt_template
@@ -213,7 +213,7 @@ class GPTSFTDataset(Dataset):
 
         tokenized_text = pre_pad + self.tokenizer.text_to_ids(text)
         context_ids = pre_pad + self.tokenizer.text_to_ids(context)
-        answer_ids = tokenized_text[len(context_ids):]
+        answer_ids = tokenized_text[len(context_ids) :]
         question_ids = self.tokenizer.text_to_ids(question)
         context_ids_only = self.tokenizer.text_to_ids(context_only)
         context_ids = pre_pad + context_ids_only
@@ -263,7 +263,6 @@ class GPTSFTDataset(Dataset):
             'metadata': metadata,
         }
         return processed_example
-
 
     def _maybe_cast_to_list(self, x):
         if isinstance(x, np.ndarray):
