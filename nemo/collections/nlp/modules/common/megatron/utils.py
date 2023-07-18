@@ -509,7 +509,7 @@ def _get_local_attention_mask(
 
 
 def build_rel_pos_long_attention(
-    seq_length, use_long_attention, local_context, global_block_size, global_segment_pos_idx=False, causal=False
+    seq_length, use_long_attention, local_context, global_block_size, global_segment_pos_idx=False, causal=False, get_mask=False,
 ):
 
     side_bias_idx = None
@@ -526,10 +526,14 @@ def build_rel_pos_long_attention(
             context_global_block_idx = F.pad(
                 context_global_block_idx, (0, seq_length + pad_len - context_global_block_idx.shape[0])
             )
+            if get_mask and causal:
+                side_bias_idx += 1
         else:
             side_bias_idx = torch.arange(
                 global_block_size // 2, global_block_size // 2 + seq_length, global_block_size, device=device,
             )
+            if get_mask and causal:
+                side_bias_idx += global_block_size // 2
     elif use_long_attention != "local_only":
 
         side_bias_idx = torch.arange(0, seq_length, global_block_size, device=device)
@@ -555,6 +559,9 @@ def build_rel_pos_long_attention(
         relative_position = torch.cat((relative_position, relative_position_side), dim=-1)
 
         global_tokens = relative_position_side.shape[-1]
+
+    if get_mask:
+        return relative_position > 0
 
     # block, q, kv
 

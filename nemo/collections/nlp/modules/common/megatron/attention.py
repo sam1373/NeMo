@@ -541,15 +541,22 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
             rotary_pos_emb = rotary_pos_emb if isinstance(rotary_pos_emb, tuple) else ((rotary_pos_emb,) * 2)
 
         if inference_max_sequence_len:
+            seq_len = key_layer.size(0)
+            if self.use_long_attention == "global_norm" or self.use_long_attention == "tglobal":
+                seq_len -= global_pos_idx.shape[1]
+
             # Adjust the range variables.
             start = self.inference_current_sequence_len
-            self.inference_current_sequence_len += key_layer.size(0)
+            self.inference_current_sequence_len += seq_len
             end = self.inference_current_sequence_len
             # Copy key and values.
-            self.inference_key_memory[start:end, ...] = key_layer
-            self.inference_value_memory[start:end, ...] = value_layer
-            key_layer = self.inference_key_memory[:end, ...]
-            value_layer = self.inference_value_memory[:end, ...]
+
+            self.inference_key_memory[start:end, ...] = key_layer[:seq_len]
+            self.inference_value_memory[start:end, ...] = value_layer[:seq_len]
+
+            if not set_inference_key_value_memory:
+                key_layer = self.inference_key_memory[:end, ...]
+                value_layer = self.inference_value_memory[:end, ...]
             # Adjust attention mask
             if attention_mask is not None:
                 attention_mask = attention_mask[..., start:end, :end]
@@ -997,7 +1004,7 @@ class CoreAttention(MegatronModule):
 
             if causal and self.use_flash_attention:
                 # hack
-                context_layer = context_layer[:, :, self.local_context :]
+                context_layer = context_layer[:, :, -self.local_context :]
 
             sq_true = sq
             if use_long_attention == "tglobal" or use_long_attention == "global_norm":
@@ -1355,16 +1362,17 @@ class CoreAttention(MegatronModule):
                 relative_position_bias = relative_position_bias + torch.where(attention_mask, 0.0, -1e10)
 
             if causal and not global_attn_separate:
-                relative_position, global_tokens = build_rel_pos_long_attention(
+                causal_mask = build_rel_pos_long_attention(
                     seq_length=sq0,
                     use_long_attention=self.use_long_attention,
                     local_context=self.local_context,
                     global_block_size=self.global_block_size,
-                    global_segment_pos_idx=(self.use_long_attention == 'longt5_relative'),
+                    global_segment_pos_idx=(self.position_embedding_type == 'longt5_relative'),
                     causal=True,
+                    get_mask=True
                 )
 
-                relative_position_bias += torch.where(relative_position > 0, -1e10, 0)
+                relative_position_bias += torch.where(causal_mask, -1e10, 0)
 
         query_layer = rearrange(query_layer, "bs np nb sq hn -> sq (bs nb) np hn")
         key_layer = rearrange(key_layer, "bs np nb sk hn -> sk (bs nb) np hn")
@@ -1375,7 +1383,8 @@ class CoreAttention(MegatronModule):
 
         if causal and self.use_flash_attention:
             # temporary hack for causal until FA adds offset q param
-            query_layer = F.pad(query_layer, (0, 0, 0, 0, 0, 0, self.local_context, 0))
+            #query_layer = _pad_to_multiple(query_layer, key_layer.shape[0], )
+            query_layer = F.pad(query_layer, (0, 0, 0, 0, 0, 0, key_layer.shape[0] - query_layer.shape[0], 0))
 
         if global_attn_separate:
             global_query_layer = rearrange(side_q, "bs np sq hn -> sq bs np hn")
