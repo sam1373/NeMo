@@ -50,24 +50,25 @@ class MegatronT5Model(MegatronLMEncoderDecoderModel):
 
     def _validate_cfg(self):
         """Class-specific cfg validation"""
+        dataset_type = self._cfg.data.get('dataset_type', None)
         # Make sure the user specifies dataset type as either 't5' or 't5_prefix_lm' only.
-        if self._cfg.data.get('dataset_type', None) is not None:
-            if self._cfg.data.get('dataset_type') not in ['t5', 't5_prefix_lm', 'ul2']:
+        if dataset_type is not None:
+            if dataset_type not in ['t5', 't5_prefix_lm', 'ul2', 'ul2_colt5']:
                 raise ValueError(
-                    f"dataset_type must be either 't5', 't5_prefix_lm' or 'ul2'. found {self._cfg.data.get('dataset_type')}"
+                    f"dataset_type must be either 't5', 't5_prefix_lm', 'ul2' or 'ul2_colt5'. found {dataset_type}"
                 )
 
-        if hasattr(self._cfg.data, 'seq_length_dec') and self._cfg.data.get('dataset_type') == 't5':
+        if hasattr(self._cfg.data, 'seq_length_dec') and dataset_type == 't5':
             if self._cfg.data.seq_length_dec < self._cfg.data.seq_length * self._cfg.data.masked_lm_prob:
                 raise ValueError(
                     f"Cannot have decoder max sequence length ({self._cfg.data.seq_length_dec}) less than encoder sequence length ({self._cfg.data.seq_length}) * masked_lm_prob ({self._cfg.data.masked_lm_prob})"
                 )
 
-        if self._cfg.data.get("dataset_type", "t5") == "ul2":
-            if self._cfg.data.seq_length_dec != self._cfg.data.seq_length:
-                raise ValueError(
-                    f"Encoder and decoder sequence lengths must be the same while using the UL2 dataset type. Found encoder length {self._cfg.data.seq_length} and decoder length {self._cfg.data.seq_length_dec}"
-                )
+        if dataset_type == "ul2":
+            # if self._cfg.data.seq_length_dec != self._cfg.data.seq_length:
+            #     raise ValueError(
+            #         f"Encoder and decoder sequence lengths must be the same while using the UL2 dataset type. Found encoder length {self._cfg.data.seq_length} and decoder length {self._cfg.data.seq_length_dec}"
+            #     )
             if (
                 self._cfg.tokenizer.num_sentinel_tokens
                 < self._cfg.data.seq_length * self._cfg.data.extreme_masked_lm_prob
@@ -75,6 +76,14 @@ class MegatronT5Model(MegatronLMEncoderDecoderModel):
                 raise ValueError(
                     f"Not enough sentinel tokens specified. Need at least {math.ceil(self._cfg.data.seq_length * self._cfg.data.extreme_masked_lm_prob)} sentinel tokens. Found {self._cfg.tokenizer.num_sentinel_tokens}"
                 )
+        elif dataset_type == "ul2_colt5":
+            logging.warning("Using UL2CoLT5 dataset type.")
+            if (
+                self._cfg.tokenizer.num_sentinel_tokens < self._cfg.data.seq_length * self._cfg.data.extreme_masked_lm_prob
+            ):
+                raise ValueError(
+                    f"Not enough sentinel tokens specified. Need at least {math.ceil(self._cfg.data.seq_length * self._cfg.data.extreme_masked_lm_prob)} sentinel tokens. Found {self._cfg.tokenizer.num_sentinel_tokens}"
+                )  
 
     @property
     def _build_train_valid_test_datasets_kwargs(self):
@@ -164,7 +173,7 @@ class MegatronT5Model(MegatronLMEncoderDecoderModel):
                     f'<extra_id_{i}>' for i in range(tokenizer_cfg.get('num_sentinel_tokens', 0))
                 ]
             }
-            if dataset_type == "ul2":
+            if dataset_type == ["ul2", "ul2_colt5"]:
                 mask_types = ['r', 's', 'x']
                 for mask_type in mask_types:
                     additional_tokens['additional_special_tokens'].extend([f'<extra_id_{mask_type}>'])
@@ -187,7 +196,7 @@ class MegatronT5Model(MegatronLMEncoderDecoderModel):
                         tokenizer, tokenizer_cfg.num_sentinel_tokens, add_sentinel_tokens_in_reverse_order
                     )
 
-            if dataset_type == "ul2":
+            if dataset_type in ["ul2", "ul2_colt5"]:
                 for mask_type in ['r', 's', 'x']:
                     if len(tokenizer.text_to_ids(f'▁<extra_id_{mask_type}>')) == 1:
                         tokenizer.special_token_to_id[f'<extra_id_{mask_type}>'] = tokenizer.text_to_ids(
