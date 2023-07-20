@@ -222,7 +222,7 @@ class MegatronTokenLevelEncoderDecoderModule(MegatronModule):
                 ffn_hidden_size=encoder_cfg.ffn_hidden_size,
                 num_layers=encoder_cfg.num_layers,
                 num_attention_heads=encoder_cfg.num_attention_heads,
-                apply_query_key_layer_scaling=encoder_cfg.get('apply_query_key_layer_scaling', True),
+                apply_query_key_layer_scaling=encoder_cfg.get('apply_query_key_layer_scaling', False),
                 kv_channels=encoder_kv_channels,
                 init_method=init_method_normal(encoder_cfg.get('init_method_std', 0.02)),
                 scaled_init_method=scaled_init_method_normal(
@@ -364,7 +364,7 @@ class MegatronTokenLevelEncoderDecoderModule(MegatronModule):
                 ffn_hidden_size=decoder_cfg.ffn_hidden_size,
                 num_layers=decoder_cfg.num_layers,
                 num_attention_heads=decoder_cfg.num_attention_heads,
-                apply_query_key_layer_scaling=decoder_cfg.get('apply_query_key_layer_scaling', True),
+                apply_query_key_layer_scaling=decoder_cfg.get('apply_query_key_layer_scaling', False),
                 kv_channels=decoder_kv_channels,
                 init_method=init_method_normal(decoder_cfg.get('init_method_std', 0.02)),
                 scaled_init_method=scaled_init_method_normal(
