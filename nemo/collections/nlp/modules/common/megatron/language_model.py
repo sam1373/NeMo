@@ -128,6 +128,7 @@ def get_language_model(
     use_long_attention=None,
     local_context=128,
     global_block_size=16,
+    use_long_attn_decoding=False,
 ):
     """Build language model and return along with the key to save."""
 
@@ -207,6 +208,7 @@ def get_language_model(
         use_long_attention=use_long_attention,
         local_context=local_context,
         global_block_size=global_block_size,
+        use_long_attn_decoding=use_long_attn_decoding,
     )
     # key used for checkpoints.
     language_model_key = 'language_model'
@@ -517,6 +519,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
         use_long_attention=None,
         local_context=128,
         global_block_size=16,
+        use_long_attn_decoding=False,
     ):
         super(TransformerLanguageModel, self).__init__(share_token_embeddings=share_embeddings_and_output_weights)
 
@@ -541,6 +544,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
         self.use_long_attention = use_long_attention
         self.local_context = local_context
         self.global_block_size = global_block_size
+        self.use_long_attn_decoding = use_long_attn_decoding
         embedding_init_method_std = 0.02
         if kv_channels is None:
 
@@ -812,7 +816,9 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
         encoder_self_attention_relative_position_bias = None
 
         use_long_attention = self.use_long_attention
-        if encoder_input.size(0) == 1:
+        is_decoding = encoder_input.size(0) == 1
+
+        if is_decoding and use_long_attention and not self.use_long_attn_decoding:
             use_long_attention = None
 
         if self.position_embedding_type == 'rope':
@@ -831,6 +837,27 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
             else:
                 longt5_rel = self.position_embedding_type == 'longt5_relative'
                 global_attn_separate = self.use_long_attention == "global_to_global"
+
+                if is_decoding:
+                    relative_position = build_rel_pos_long_attention(
+                        seq_length=enc_seq_length,
+                        use_long_attention=self.use_long_attention,
+                        local_context=self.local_context,
+                        global_block_size=self.global_block_size,
+                        global_segment_pos_idx=longt5_rel,
+                        causal=True,
+                        decoding=True,
+                    )
+
+                    encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding.get_bias(
+                        relative_position
+                    )
+
+                    encoder_self_attention_relative_position_bias = encoder_self_attention_relative_position_bias.transpose(
+                        0, 1
+                    )[
+                        None
+                    ]
 
                 if global_attn_separate:
                     relative_position_local, global_tokens = build_rel_pos_long_attention(
@@ -856,13 +883,14 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
                         relative_position_global_bias,
                     )
                 else:
-                    relative_position, global_tokens = build_rel_pos_long_attention(
+                    relative_position, global_tokens, causal_mask = build_rel_pos_long_attention(
                         seq_length=enc_seq_length,
                         use_long_attention=self.use_long_attention,
                         local_context=self.local_context,
                         global_block_size=self.global_block_size,
                         global_segment_pos_idx=longt5_rel,
                         causal=True,
+                        get_mask=True,
                     )
 
                     if longt5_rel:
@@ -873,6 +901,18 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
                         encoder_self_attention_relative_position_bias = self.encoder_relative_position_embedding.get_bias(
                             relative_position
                         )
+
+                    encoder_self_attention_relative_position_bias += torch.where(causal_mask.unsqueeze(1), -1e10, 0)
+
+                    if self.position_embedding_type == 'alibi':
+                        full_bias = encoder_self_attention_relative_position_bias
+                        encoder_self_attention_relative_position_bias = encoder_self_attention_relative_position_bias[
+                            :, :, -1
+                        ].unsqueeze(2)
+                        encoder_self_attention_relative_position_bias[:, :, 0, :global_tokens] = full_bias[
+                            :, :, 0, :global_tokens
+                        ]
+                        del full_bias
 
                     encoder_self_attention_relative_position_bias = encoder_self_attention_relative_position_bias.transpose(
                         0, 1

@@ -247,6 +247,7 @@ class GPTModelTextGenerationStrategy(TextGenerationStrategy):
         tensor_shape = [tokens2use.shape[1], micro_batch_size, self.model.cfg.hidden_size]
         return batch, tensor_shape
 
+
 class LimitedContextGPTModelTextGenerationStrategy(GPTModelTextGenerationStrategy):
     def __init__(self, model):
         super().__init__(model)
@@ -279,11 +280,11 @@ class LimitedContextGPTModelTextGenerationStrategy(GPTModelTextGenerationStrateg
 
         """Prepare batch for each of the inference steps"""
         attention_mask_repeat = None
-        #if compute_attention_mask:
+        # if compute_attention_mask:
         #    attention_mask_repeat = torch.concat([self.attention_mask for _ in range(micro_batch_size)])
 
         past_len = 128 + 1024
-        #TODO: change this
+        # TODO: change this
 
         setkey_value_array = torch.tensor(
             [set_inference_key_value_memory] * micro_batch_size, device=torch.cuda.current_device()
@@ -391,8 +392,8 @@ def model_inference_strategy_dispatcher(model, **args):
     if isinstance(model, MegatronGPTPromptLearningModel):
         return PromptLearningModelTextGenerationStrategy(model, **args)
     elif isinstance(model, MegatronGPTModel):
-        #if model.cfg.get("use_long_attention", None) is not None:
-        #    return LimitedContextGPTModelTextGenerationStrategy(model)
+        if model.cfg.get("use_long_attn_decoding", False):
+            return LimitedContextGPTModelTextGenerationStrategy(model)
         return GPTModelTextGenerationStrategy(model)
     elif isinstance(model, MegatronRetrievalModel):
         strategy_name = args['strategy']

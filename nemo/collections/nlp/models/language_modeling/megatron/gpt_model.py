@@ -168,6 +168,7 @@ class GPTModel(MegatronModule):
         use_long_attention=None,
         local_context=128,
         global_block_size=16,
+        use_long_attn_decoding=False,
     ):
         super(GPTModel, self).__init__(share_token_embeddings=share_embeddings_and_output_weights)
 
@@ -179,6 +180,8 @@ class GPTModel(MegatronModule):
         self.gradient_accumulation_fusion = gradient_accumulation_fusion
         self.share_embeddings_and_output_weights = share_embeddings_and_output_weights
         self.dtype = utils_funcs.dtype_from_precision(precision, megatron_amp_O2)
+        self.use_long_attention = use_long_attention
+        self.use_long_attn_decoding = use_long_attn_decoding
 
         if kv_channels is None:
             assert (
@@ -253,6 +256,7 @@ class GPTModel(MegatronModule):
             use_long_attention=use_long_attention,
             local_context=local_context,
             global_block_size=global_block_size,
+            use_long_attn_decoding=use_long_attn_decoding,
         )
 
         if self.share_embeddings_and_output_weights:

@@ -509,8 +509,25 @@ def _get_local_attention_mask(
 
 
 def build_rel_pos_long_attention(
-    seq_length, use_long_attention, local_context, global_block_size, global_segment_pos_idx=False, causal=False, get_mask=False,
+    seq_length,
+    use_long_attention,
+    local_context,
+    global_block_size,
+    global_segment_pos_idx=False,
+    causal=False,
+    get_mask=False,
+    decoding=False,
 ):
+
+    if decoding:
+
+        relative_position_local = torch.arange(-128, 0)
+        relative_position_global = torch.arange(-1024, -1)
+
+        if not global_segment_pos_idx:
+            relative_position_global *= global_block_size
+
+        return torch.cat((relative_position_global, relative_position_local))
 
     side_bias_idx = None
 
@@ -556,12 +573,13 @@ def build_rel_pos_long_attention(
 
         relative_position_side = relative_position_side.reshape(num_blocks, local_context, -1)
 
-        relative_position = torch.cat((relative_position, relative_position_side), dim=-1)
+        relative_position = torch.cat((relative_position_side, relative_position), dim=-1)
 
         global_tokens = relative_position_side.shape[-1]
 
     if get_mask:
-        return relative_position > 0
+        mask = relative_position > 0
+        return relative_position, global_tokens, mask
 
     # block, q, kv
 

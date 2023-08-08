@@ -85,6 +85,8 @@ except (ImportError, ModuleNotFoundError):
     flash_attn_unpadded_func, flash_attn_func = None, None
     unpad_input, pad_input = None, None
 
+from ocean.nn.flash_attention import flash_attention
+
 """ We use the following notation throughout this file:
      h: hidden size
      n: number of attention heads
@@ -138,6 +140,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         use_long_attention=None,  # None / local_only / global / tglobal / global_to_global / global_limited
         local_context=128,
         global_block_size=16,
+        use_long_attn_decoding=False,
     ):
         super(ParallelAttention, self).__init__()
         self.layer_number = max(1, layer_number)
@@ -153,6 +156,8 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         self.use_long_attention = use_long_attention
         self.local_context = local_context
         self.global_block_size = global_block_size
+
+        self.use_long_attn_decoding = use_long_attn_decoding
 
         self.set_accepted_adapter_types(
             [
@@ -443,23 +448,36 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
             hidden_states = hidden_states.transpose(1, 0)
         """
 
-        global_pos_idx = torch.arange(0, hidden_states.shape[0], self.global_block_size, device=hidden_states.device)
+        is_decoding = hidden_states.shape[0] == 1
+        # ?
 
-        if self.use_long_attention == "tglobal":
-            global_hidden_states = _pad_to_multiple(hidden_states, self.global_block_size, 0)
-            global_hidden_states = global_hidden_states.reshape(
-                -1, self.global_block_size, hidden_states.shape[-2], hidden_states.shape[-1]
+        if is_decoding and not self.use_long_attn_decoding:
+            use_long_attention = None
+        else:
+            use_long_attention = self.use_long_attention
+
+        if not is_decoding:
+            global_pos_idx = torch.arange(
+                0, hidden_states.shape[0], self.global_block_size, device=hidden_states.device
             )
-            global_hidden_states = global_hidden_states.sum(dim=1)
-            global_hidden_states = self.global_norm(global_hidden_states)
-            hidden_states = torch.cat((hidden_states, global_hidden_states), dim=0)
-        elif self.use_long_attention == "global_norm":
-            global_hidden_states = hidden_states[global_pos_idx]
-            global_hidden_states = self.global_norm(global_hidden_states)
-            hidden_states = torch.cat((hidden_states, global_hidden_states), dim=0)
 
-        if global_pos_idx is not None:
-            global_pos_idx = global_pos_idx[None, :].expand(hidden_states.shape[1], -1)
+            if use_long_attention == "tglobal":
+                global_hidden_states = _pad_to_multiple(hidden_states, self.global_block_size, 0)
+                global_hidden_states = global_hidden_states.reshape(
+                    -1, self.global_block_size, hidden_states.shape[-2], hidden_states.shape[-1]
+                )
+                global_hidden_states = global_hidden_states.sum(dim=1)
+                global_hidden_states = self.global_norm(global_hidden_states)
+                hidden_states = torch.cat((global_hidden_states, hidden_states), dim=0)
+            elif use_long_attention == "global_norm":
+                global_hidden_states = hidden_states[global_pos_idx]
+                global_hidden_states = self.global_norm(global_hidden_states)
+                hidden_states = torch.cat((global_hidden_states, hidden_states), dim=0)
+
+            if global_pos_idx is not None:
+                global_pos_idx = global_pos_idx[None, :].expand(hidden_states.shape[1], -1)
+        else:
+            global_pos_idx = None
 
         if self.attention_type == AttnType.self_attn:
             # Attention heads [sq, b, h] --> [sq, b, (np * 3 * hn)]
@@ -542,7 +560,12 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
 
         if inference_max_sequence_len:
             seq_len = key_layer.size(0)
-            if self.use_long_attention == "global_norm" or self.use_long_attention == "tglobal":
+
+            if (
+                use_long_attention == "global_norm"
+                or use_long_attention == "tglobal"
+                and not self.use_long_attn_decoding
+            ):
                 seq_len -= global_pos_idx.shape[1]
 
             # Adjust the range variables.
@@ -853,9 +876,9 @@ class CoreAttention(MegatronModule):
 
         coeff = None
         self.norm_factor = math.sqrt(self.hidden_size_per_attention_head)
-        # if self.apply_query_key_layer_scaling:
-        #    coeff = self.layer_number
-        #    self.norm_factor *= coeff
+        if self.apply_query_key_layer_scaling:
+            coeff = self.layer_number
+            self.norm_factor *= coeff
 
         scale_mask_softmax_causal = self.attn_mask_type
         if use_long_attention:
@@ -911,6 +934,8 @@ class CoreAttention(MegatronModule):
             key_layer.size(0),
             query_layer.size(3),
         )
+
+        # print(b, np, sq, sk, hn)
 
         use_long_attention = self.use_long_attention if ((self.use_long_attention is not None) and (sq > 1)) else None
         causal = (self.attn_mask_type == AttnMaskType.causal) and (sq > 1)
@@ -1106,10 +1131,20 @@ class CoreAttention(MegatronModule):
         if attention_bias is not None:
             attention_scores += attention_bias
 
+        is_causal = self.attn_mask_type == AttnMaskType.causal and sq == sk
+        if attention_mask is None and is_causal:
+            s = max(sq, sk)
+            attention_mask = attention_scores.new_ones(b, 1, s, s, dtype=torch.bool)
+            attention_mask = attention_mask.tril()
+            attention_mask = ~attention_mask
+            attention_mask = attention_mask[-sq:, -sk:]
+
         attention_probs = self.scale_mask_softmax(attention_scores, attention_mask)
 
-        # This is actually dropping out entire tokens to attend to, which might
-        # seem a bit unusual, but is taken from the original Transformer paper.
+        if attention_mask is not None:
+            all_k_masked = attention_mask.all(axis=-1)
+            zero_attention_mask = (1.0 - all_k_masked.type(attention_probs.type()))[:, :, :, None]
+            attention_probs = attention_probs * zero_attention_mask
 
         if not self.sequence_parallel:
             with tensor_parallel.random.get_cuda_rng_tracker().fork():
@@ -1129,9 +1164,6 @@ class CoreAttention(MegatronModule):
         return context_layer
 
     def flash_attention(self, query_layer, key_layer, value_layer, attention_mask, attention_bias):
-        query_layer = rearrange(query_layer, 'sq b np hn -> b sq np hn')
-        key_layer = rearrange(key_layer, 'sk b np hn -> b sk np hn')
-        value_layer = rearrange(value_layer, 'sv b np hn -> b sv np hn')
 
         # Use to ensure dtype cast to fp16 or bf16
         query_layer = _cast_if_autocast_enabled(query_layer)
@@ -1155,6 +1187,10 @@ class CoreAttention(MegatronModule):
         return causal
 
     def flash_attention_cuda(self, query_layer, key_layer, value_layer, attention_mask):
+        query_layer = rearrange(query_layer, 'sq b np hn -> b sq np hn')
+        key_layer = rearrange(key_layer, 'sk b np hn -> b sk np hn')
+        value_layer = rearrange(value_layer, 'sv b np hn -> b sv np hn')
+
         batch_size, seqlen, nheads, _ = query_layer.shape
 
         # True: attend / False: not attend
@@ -1196,33 +1232,52 @@ class CoreAttention(MegatronModule):
         return context_layer
 
     def flash_attention_triton(self, query_layer, key_layer, value_layer, attention_mask, attention_bias):
-        if self.attention_dropout_p > 0.0:
-            raise NotImplementedError(f'attention_dropout not implemented for flash_attention with attention bias')
-
+        q_len, kv_len = None, None
         if attention_mask is not None:
+            """
+            attention_mask: 0 is not masked; 1 is masked
+            """
             if len(attention_mask.shape) == 4:
-                # [b, 1, sq, sk] -> [b, 1, sq, 1] / [b, 1, 1, sk]
-                attention_mask_q = torch.any(torch.eq(attention_mask, False), dim=3).unsqueeze(3)
-                attention_mask_kv = torch.any(torch.eq(attention_mask, False), dim=2).unsqueeze(2)
+                # [b, 1, sq, sk]
+                q_len = torch.any(torch.eq(attention_mask, False), dim=3).sum(-1).squeeze()
+                kv_len = torch.any(torch.eq(attention_mask, False), dim=2).sum(-1).squeeze()
             else:
-                # [b, s] -> [b, 1, s, 1] / [b, 1, 1, s]
+                # [b, s]
                 assert len(attention_mask.shape) == 2
-                attention_mask_q = attention_mask.unsqueeze(1).unsqueeze(3)
-                attention_mask_kv = attention_mask.unsqueeze(1).unsqueeze(2)
+                q_len = (~attention_mask).sum(-1).squeeze()
+                kv_len = (~attention_mask).sum(-1).squeeze()
 
-            attention_bias = attention_bias.masked_fill(~attention_mask_q, torch.finfo(query_layer.dtype).min)
-            attention_bias = attention_bias.masked_fill(~attention_mask_kv, torch.finfo(query_layer.dtype).min)
+        is_causal = self.attn_mask_type == AttnMaskType.causal
 
-        causal = self.reset_is_causal(
-            query_layer.shape[1], key_layer.shape[1], self.attn_mask_type == AttnMaskType.causal
+        if self.position_embedding_type == 'alibi':
+            if is_causal:
+                bias_type = 'vector'
+                assert len(attention_bias.size()) == 4
+            else:
+                bias_type = 'alibi'
+                attention_bias = attention_bias.squeeze()
+                assert len(attention_bias.size()) == 1, 'Alibi bias should only contain head scales.'
+        else:
+            bias_type = 'matrix'
+            assert len(attention_bias.size()) == 4
+
+        context_layer = flash_attention(
+            q=query_layer,
+            k=key_layer,
+            v=value_layer,
+            q_len=q_len,
+            kv_len=kv_len,
+            softmax_scale=(1.0 / self.norm_factor) if self.normalize_attention_scores else 1.0,
+            causal=is_causal,
+            bias=attention_bias,
+            bias_type=bias_type,
+            dropout=self.attention_dropout_p if self.training else 0.0,
+            seed=torch.seed(),
+            layout='sbnd',
         )
-        context_layer = flash_attn_func(query_layer, key_layer, value_layer, attention_bias, causal)
 
-        # [b, sq, np, hn] -> [b, np, sq, hn]
-        context_layer = context_layer.permute(0, 2, 1, 3)
-
-        if attention_mask is not None:
-            context_layer = context_layer * attention_mask_q
+        # [sq, b, np, hn] -> [b, np, sq, hn]
+        context_layer = context_layer.permute(1, 2, 0, 3)
 
         return context_layer
 
@@ -1246,15 +1301,15 @@ class CoreAttention(MegatronModule):
 
                 total_transient_tokens = global_pos_idx.shape[1]
 
-                side_k = key_layer[-total_transient_tokens:]
-                side_v = value_layer[-total_transient_tokens:]
+                side_k = key_layer[:total_transient_tokens]
+                side_v = value_layer[:total_transient_tokens]
 
                 side_k = side_k.permute(1, 2, 0, 3)
                 side_v = side_v.permute(1, 2, 0, 3)
 
-                query_layer = query_layer[:-total_transient_tokens]
-                key_layer = key_layer[:-total_transient_tokens]
-                value_layer = value_layer[:-total_transient_tokens]
+                query_layer = query_layer[total_transient_tokens:]
+                key_layer = key_layer[total_transient_tokens:]
+                value_layer = value_layer[total_transient_tokens:]
             else:
                 side_k = torch.gather(
                     key_layer.transpose(0, 1),
@@ -1328,8 +1383,8 @@ class CoreAttention(MegatronModule):
 
                 # Concatenate "local" and "side"/"global" key/value states
                 # New shape: (batch_size, n_heads, num_blocks, 3 * block_len + global_seq_len, dim_per_head)
-                key_layer = torch.cat([key_layer, side_k], dim=3)
-                value_layer = torch.cat([value_layer, side_v], dim=3)
+                key_layer = torch.cat([side_k, key_layer], dim=3)
+                value_layer = torch.cat([side_v, value_layer], dim=3)
 
         # ==================================================
         # Update attention_mask, attention_bias
@@ -1339,7 +1394,7 @@ class CoreAttention(MegatronModule):
         bs, np, nb, sk = key_layer.shape[:4]
         sq = query_layer.shape[3]
 
-        if not (causal and self.use_flash_attention):
+        if not (causal and self.position_embedding_type == 'alibi'):
 
             local_attention_mask = _get_local_attention_mask(
                 ~attention_mask.squeeze(1), self.local_context, causal, attention_mask.device
@@ -1350,7 +1405,7 @@ class CoreAttention(MegatronModule):
                 attention_mask = torch.ones(
                     bs, np, nb, sq, sk, dtype=local_attention_mask.dtype, device=torch.cuda.current_device(),
                 )
-                attention_mask[..., : local_attention_mask.shape[-1]] = local_attention_mask
+                attention_mask[..., -local_attention_mask.shape[-1] :] = local_attention_mask
             else:
                 attention_mask = local_attention_mask
 
@@ -1361,7 +1416,7 @@ class CoreAttention(MegatronModule):
                 relative_position_bias = relative_position_bias[..., :nb, :, :sk]
                 relative_position_bias = relative_position_bias + torch.where(attention_mask, 0.0, -1e10)
 
-            if causal and not global_attn_separate:
+            """if causal and not global_attn_separate:
                 causal_mask = build_rel_pos_long_attention(
                     seq_length=sq0,
                     use_long_attention=self.use_long_attention,
@@ -1372,19 +1427,16 @@ class CoreAttention(MegatronModule):
                     get_mask=True
                 )
 
-                relative_position_bias += torch.where(causal_mask, -1e10, 0)
+                relative_position_bias += torch.where(causal_mask, -1e10, 0)"""
 
         query_layer = rearrange(query_layer, "bs np nb sq hn -> sq (bs nb) np hn")
         key_layer = rearrange(key_layer, "bs np nb sk hn -> sk (bs nb) np hn")
         value_layer = rearrange(value_layer, "bs np nb sv hn -> sv (bs nb) np hn")
         attention_mask = None
         if relative_position_bias is not None:
+            if relative_position_bias.shape[0] == 1:
+                relative_position_bias = relative_position_bias.repeat(bs, 1, 1, 1, 1)
             relative_position_bias = rearrange(relative_position_bias, 'b np nb sq sk -> (b nb) np sq sk')
-
-        if causal and self.use_flash_attention:
-            # temporary hack for causal until FA adds offset q param
-            #query_layer = _pad_to_multiple(query_layer, key_layer.shape[0], )
-            query_layer = F.pad(query_layer, (0, 0, 0, 0, 0, 0, key_layer.shape[0] - query_layer.shape[0], 0))
 
         if global_attn_separate:
             global_query_layer = rearrange(side_q, "bs np sq hn -> sq bs np hn")

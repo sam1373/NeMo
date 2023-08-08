@@ -114,7 +114,7 @@ class LongT5RelativePositionEmbedding(torch.nn.Module):
             num_buckets=self.relative_position_num_buckets,
             max_distance=self.relative_position_max_distance,
         )
-        bias = self.global_position_embedding(relative_position_bucket_tensor)
+        bias = self.local_position_embedding(relative_position_bucket_tensor)
         bias = bias.permute(2, 0, 1).unsqueeze(0)
 
         return bias
@@ -128,13 +128,13 @@ class LongT5RelativePositionEmbedding(torch.nn.Module):
             max_distance=self.relative_position_max_distance,
         )
 
-        relative_position_local_buckets = relative_position_buckets[:, :, :-global_tokens]
-        relative_position_global_buckets = relative_position_buckets[:, :, -global_tokens:]
+        relative_position_local_buckets = relative_position_buckets[:, :, global_tokens:]
+        relative_position_global_buckets = relative_position_buckets[:, :, :global_tokens]
 
         local_bias = self.local_position_embedding(relative_position_local_buckets)
         global_bias = self.global_position_embedding(relative_position_global_buckets)
 
-        bias = torch.cat((local_bias, global_bias), dim=2)
+        bias = torch.cat((global_bias, local_bias), dim=2)
         bias = bias.permute(0, 3, 1, 2)
 
         return bias

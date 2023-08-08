@@ -175,7 +175,7 @@ class MegatronTransformerEncoderModule(MegatronModule, Exportable, MegatronEncod
         enc_self_attention_relative_position_bias=None,
     ):
         # convert to Megatron mask
-        if self.use_long_attention or self.use_flash_attention:
+        if self.use_long_attention:
             enc_attn_mask_3d = enc_attn_mask < 0.5
         else:
             enc_attn_mask_3d = build_attention_mask_3d(
