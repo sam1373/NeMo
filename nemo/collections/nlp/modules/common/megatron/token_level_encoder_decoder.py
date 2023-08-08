@@ -190,6 +190,10 @@ class MegatronTokenLevelEncoderDecoderModule(MegatronModule):
                     layer_type=LayerType.encoder,
                 )
                 self._encoder_relative_position_embedding_key = "encoder_relative_position_embedding"
+                # Pipeline model parallel rank 0 will have the actual RPE weights. We zero it out on all other ranks and then sync them on setup.
+                if parallel_state.get_pipeline_model_parallel_rank() != 0:
+                    self.encoder_relative_position_embeddings_weight().data.fill_(0)
+                    self.encoder_relative_position_embeddings_weight().shared = True
             elif self.encoder_cfg.get('position_embedding_type', 'learned_absolute') == 'alibi':
                 self.encoder_relative_position_embedding = ALiBiRelativePositionEmbedding(
                     bidirectional=True,

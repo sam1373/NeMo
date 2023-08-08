@@ -38,10 +38,11 @@ def main(cfg) -> None:
 
     ###### following is the workaround for num_workers=0 issue #####
     import torch.multiprocessing as mp
+
     if cfg.model.data.get('data_impl') != 'text_mmap' and cfg.model.data.num_workers > 0:
         mp.set_start_method("spawn", force=True)
         logging.info(f"mp start SPAWN")
-   
+
     megatron_amp_o2 = cfg.model.get('megatron_amp_O2', False)
     with_distributed_adam = cfg.model.optim.get('name') == 'distributed_fused_adam'
     plugins = []
