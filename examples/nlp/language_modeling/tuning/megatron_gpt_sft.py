@@ -109,7 +109,7 @@ def load_from_nemo(cls, cfg, trainer, gpt_cfg, modify_confg_fn):
         trainer=trainer,
         override_config_path=gpt_cfg,
         save_restore_connector=save_restore_connector,
-        strict=False
+        strict=False,
     )
     return model
 

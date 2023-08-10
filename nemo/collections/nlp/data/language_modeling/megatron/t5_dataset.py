@@ -313,7 +313,7 @@ class T5Dataset(Dataset):
             tokenizer_type=tokenizer_type,
             skip_masking_id=skip_masking_id,
         )
-        
+
         if masked_lm_prob == 0:
             (output_tokens, masked_positions, masked_labels, _) = lm_pred
             masked_spans = None
@@ -399,11 +399,11 @@ class T5Dataset(Dataset):
         # Tokens..
         filler = [pad_id] * padding_length
         tokens_enc = np.array(t5_input + filler, dtype=np.int64)
-        
+
         # Decoder-side padding mask.
         num_tokens_dec = len(t5_decoder_in)
         padding_length_dec = max_seq_length_dec - num_tokens_dec
-        
+
         assert padding_length_dec >= 0, (padding_length_dec, max_seq_length_dec, num_tokens_dec)
 
         filler_dec = [pad_id] * padding_length_dec

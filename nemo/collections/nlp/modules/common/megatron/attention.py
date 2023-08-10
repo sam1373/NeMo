@@ -414,10 +414,15 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
             self.inference_value_memory = self._allocate_memory(
                 inference_max_sequence_len, hidden_states.size(1), hidden_states.dtype, hidden_states.device
             )
-            self.inference_current_sequence_len = 0
+
+            if not self.use_long_attn_decoding:
+                self.inference_current_sequence_len = 0
+            else:
+                self.inference_current_local_len = 0
+                self.inference_current_global_len = 0
 
         # Some consistency check.
-        if inference_max_sequence_len:
+        if inference_max_sequence_len and not self.use_long_attn_decoding:
             assert self.inference_current_sequence_len < self.inference_key_memory.size(0)
             assert inference_max_sequence_len == self.inference_key_memory.size(0)
         # This is added for safety. In case inference_max_sequence_len
@@ -469,9 +474,10 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                 global_hidden_states = global_hidden_states.sum(dim=1)
                 global_hidden_states = self.global_norm(global_hidden_states)
                 hidden_states = torch.cat((global_hidden_states, hidden_states), dim=0)
-            elif use_long_attention == "global_norm":
+            else:
                 global_hidden_states = hidden_states[global_pos_idx]
-                global_hidden_states = self.global_norm(global_hidden_states)
+                if use_long_attention == "global_norm":
+                    global_hidden_states = self.global_norm(global_hidden_states)
                 hidden_states = torch.cat((global_hidden_states, hidden_states), dim=0)
 
             if global_pos_idx is not None:
@@ -561,39 +567,100 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         if inference_max_sequence_len:
             seq_len = key_layer.size(0)
 
-            if (
-                use_long_attention == "global_norm"
-                or use_long_attention == "tglobal"
-                and not self.use_long_attn_decoding
-            ):
-                seq_len -= global_pos_idx.shape[1]
-
-            # Adjust the range variables.
-            start = self.inference_current_sequence_len
-            self.inference_current_sequence_len += seq_len
-            end = self.inference_current_sequence_len
-            # Copy key and values.
-
-            self.inference_key_memory[start:end, ...] = key_layer[:seq_len]
-            self.inference_value_memory[start:end, ...] = value_layer[:seq_len]
-
-            if not set_inference_key_value_memory:
-                key_layer = self.inference_key_memory[:end, ...]
-                value_layer = self.inference_value_memory[:end, ...]
-            # Adjust attention mask
-            if attention_mask is not None:
-                attention_mask = attention_mask[..., start:end, :end]
-            # adjust the key rotary positional embedding
-            if rotary_pos_emb is not None:
-                q_pos_emb, k_pos_emb = rotary_pos_emb
+            if self.use_long_attn_decoding:
                 if not set_inference_key_value_memory:
-                    # In inference, we compute one token at a time.
-                    # Select the correct positional embedding.
-                    q_pos_emb = q_pos_emb[end - 1 : end]
+                    ### add or re-write local
+
+                    if self.inference_current_local_len < self.local_context:
+                        # if there's space left then just add to local past
+
+                        start_local = -self.local_context + self.inference_current_local_len
+                        self.inference_current_local_len += seq_len
+                        end_local = self.inference_current_local_len
+
+                        self.inference_key_memory[start_local:end_local, ...] = key_layer[-seq_len:]
+                        self.inference_value_memory[start_local:end_local, ...] = value_layer[-seq_len:]
+                    else:
+
+                        self.inference_key_memory[-self.local_context : -seq_len] = self.inference_key_memory[
+                            -self.local_context + seq_len :
+                        ]
+                        self.inference_value_memory[-self.local_context : -seq_len] = self.inference_value_memory[
+                            -self.local_context + seq_len :
+                        ]
+
+                        self.inference_key_memory[-seq_len:] = key_layer
+                        self.inference_value_memory[-seq_len:] = value_layer
+
+                    key_layer = torch.cat(
+                        (
+                            self.inference_key_memory[: self.inference_current_global_len],
+                            self.inference_key_memory[
+                                -self.local_context : -self.local_context + self.inference_current_local_len
+                            ],
+                        ),
+                        dim=0,
+                    )
+                    value_layer = torch.cat(
+                        (
+                            self.inference_value_memory[: self.inference_current_global_len],
+                            self.inference_value_memory[
+                                -self.local_context : -self.local_context + self.inference_current_local_len
+                            ],
+                        ),
+                        dim=0,
+                    )
+
                 else:
-                    q_pos_emb = q_pos_emb[:end, :, :, :]
-                k_pos_emb = k_pos_emb[:end, :, :, :]
-                rotary_pos_emb = (q_pos_emb, k_pos_emb)
+                    ### store global and local
+                    global_tokens = global_pos_idx.shape[1]
+
+                    self.inference_key_memory[:global_tokens] = key_layer[:global_tokens]
+                    self.inference_value_memory[:global_tokens] = value_layer[:global_tokens]
+
+                    self.inference_current_global_len = global_tokens
+
+                    local_tokens = min(self.local_context, key_layer.shape[0] - global_tokens)
+
+                    self.inference_key_memory[-self.local_context : -self.local_context + local_tokens] = key_layer[
+                        -local_tokens:
+                    ]
+                    self.inference_value_memory[
+                        -self.local_context : -self.local_context + local_tokens
+                    ] = value_layer[-local_tokens:]
+
+                    self.inference_current_local_len = local_tokens
+            else:
+
+                if use_long_attention is not None and not self.use_long_attn_decoding:
+                    seq_len -= global_pos_idx.shape[1]
+
+                # Adjust the range variables.
+                start = self.inference_current_sequence_len
+                self.inference_current_sequence_len += seq_len
+                end = self.inference_current_sequence_len
+                # Copy key and values.
+
+                self.inference_key_memory[start:end, ...] = key_layer[-seq_len:]
+                self.inference_value_memory[start:end, ...] = value_layer[-seq_len:]
+
+                if not set_inference_key_value_memory:
+                    key_layer = self.inference_key_memory[:end, ...]
+                    value_layer = self.inference_value_memory[:end, ...]
+                # Adjust attention mask
+                if attention_mask is not None:
+                    attention_mask = attention_mask[..., start:end, :end]
+                # adjust the key rotary positional embedding
+                if rotary_pos_emb is not None:
+                    q_pos_emb, k_pos_emb = rotary_pos_emb
+                    if not set_inference_key_value_memory:
+                        # In inference, we compute one token at a time.
+                        # Select the correct positional embedding.
+                        q_pos_emb = q_pos_emb[end - 1 : end]
+                    else:
+                        q_pos_emb = q_pos_emb[:end, :, :, :]
+                    k_pos_emb = k_pos_emb[:end, :, :, :]
+                    rotary_pos_emb = (q_pos_emb, k_pos_emb)
 
         if layer_past is not None:
             past_key, past_value = layer_past
@@ -1032,7 +1099,7 @@ class CoreAttention(MegatronModule):
                 context_layer = context_layer[:, :, -self.local_context :]
 
             sq_true = sq
-            if use_long_attention == "tglobal" or use_long_attention == "global_norm":
+            if use_long_attention is not None:
                 sq_true -= global_pos_idx.shape[1]
             nb = (sq_true + self.local_context - 1) // self.local_context
             context_layer = rearrange(context_layer, '(b nb) np sq hn -> b np (nb sq) hn', nb=nb)
@@ -1297,7 +1364,7 @@ class CoreAttention(MegatronModule):
         # Update query_layer, key_layer, value_layer
         # ==================================================
         if global_pos_idx is not None:
-            if self.use_long_attention == "tglobal" or self.use_long_attention == "global_norm":
+            if self.use_long_attention is not None:
 
                 total_transient_tokens = global_pos_idx.shape[1]
 
@@ -1310,7 +1377,7 @@ class CoreAttention(MegatronModule):
                 query_layer = query_layer[total_transient_tokens:]
                 key_layer = key_layer[total_transient_tokens:]
                 value_layer = value_layer[total_transient_tokens:]
-            else:
+            """else:
                 side_k = torch.gather(
                     key_layer.transpose(0, 1),
                     dim=1,
@@ -1335,7 +1402,7 @@ class CoreAttention(MegatronModule):
                     )
                     side_q = side_q.transpose(1, 2)
 
-                # [b, nh, sq/k, np]
+                # [b, nh, sq/k, np]"""
 
         if attention_mask is None:
             attention_mask = torch.zeros(
@@ -1394,7 +1461,7 @@ class CoreAttention(MegatronModule):
         bs, np, nb, sk = key_layer.shape[:4]
         sq = query_layer.shape[3]
 
-        if not (causal and self.position_embedding_type == 'alibi'):
+        if not (causal and self.use_flash_attention):
 
             local_attention_mask = _get_local_attention_mask(
                 ~attention_mask.squeeze(1), self.local_context, causal, attention_mask.device

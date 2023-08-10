@@ -527,7 +527,7 @@ def build_rel_pos_long_attention(
         if not global_segment_pos_idx:
             relative_position_global *= global_block_size
 
-        return torch.cat((relative_position_global, relative_position_local))
+        return torch.cat((relative_position_global, relative_position_local))[None, :], 1024
 
     side_bias_idx = None
 
