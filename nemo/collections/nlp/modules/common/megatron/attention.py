@@ -571,7 +571,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         if inference_max_sequence_len:
             seq_len = key_layer.size(0)
 
-            if self.use_long_attn_decoding:
+            if self.use_long_attn_decoding and use_long_attention is not None:
                 if not set_inference_key_value_memory:
                     ### add or re-write local
 
@@ -588,10 +588,10 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
 
                         self.inference_key_memory[-self.local_context : -seq_len] = self.inference_key_memory[
                             -self.local_context + seq_len :
-                        ]
+                        ].clone()
                         self.inference_value_memory[-self.local_context : -seq_len] = self.inference_value_memory[
                             -self.local_context + seq_len :
-                        ]
+                        ].clone()
 
                         self.inference_key_memory[-seq_len:] = key_layer
                         self.inference_value_memory[-seq_len:] = value_layer
@@ -639,12 +639,16 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
 
                     local_tokens = min(self.local_context, key_layer.shape[0] - global_tokens)
 
-                    self.inference_key_memory[-self.local_context : -self.local_context + local_tokens] = key_layer[
-                        -local_tokens:
-                    ]
-                    self.inference_value_memory[
-                        -self.local_context : -self.local_context + local_tokens
-                    ] = value_layer[-local_tokens:]
+                    if local_tokens == self.local_context:
+                        self.inference_key_memory[-self.local_context:] = key_layer[-self.local_context:]
+                        self.inference_value_memory[-self.local_context:] = value_layer[-self.local_context:]
+                    else:
+                        self.inference_key_memory[-self.local_context : -self.local_context + local_tokens] = key_layer[
+                            -local_tokens:
+                        ]
+                        self.inference_value_memory[
+                            -self.local_context : -self.local_context + local_tokens
+                        ] = value_layer[-local_tokens:]
 
                     self.inference_current_local_len = local_tokens
             else:
