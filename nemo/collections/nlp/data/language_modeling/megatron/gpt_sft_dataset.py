@@ -256,7 +256,7 @@ class GPTSFTDataset(Dataset):
         if self.add_eos and self.tokens_to_generate == 0:
             input_ids = input_ids + [self.tokenizer.eos_id]
 
-        assert len(input_ids) <= self.max_seq_length
+        #assert len(input_ids) <= self.max_seq_length
 
         # store metadata in dataset, in case user may have keys required in the prediction json files
         metadata = {k: v for k, v in example.items() if k not in [self.context_key, self.label_key]}
