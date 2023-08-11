@@ -137,7 +137,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         gradient_accumulation_fusion=False,
         normalize_attention_scores=True,
         use_flash_attention=False,
-        use_long_attention=None,  # None / local_only / global / tglobal / global_to_global / global_limited
+        use_long_attention=None,  # None / local / global / tglobal / global_to_global / global_limited
         local_context=128,
         global_block_size=16,
         use_long_attn_decoding=False,
@@ -459,9 +459,13 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         if is_decoding and not self.use_long_attn_decoding:
             use_long_attention = None
         else:
-            use_long_attention = self.use_long_attention
+            if self.use_long_attention == "tglobal" and hidden_states.shape[0] < self.global_block_size:
+                use_long_attention = "local"
+            else:
+                use_long_attention = self.use_long_attention
 
-        if not is_decoding:
+        if not is_decoding and use_long_attention is not None and use_long_attention != "local":
+
             global_pos_idx = torch.arange(
                 0, hidden_states.shape[0], self.global_block_size, device=hidden_states.device
             )
@@ -632,7 +636,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                     self.inference_current_local_len = local_tokens
             else:
 
-                if use_long_attention is not None and not self.use_long_attn_decoding:
+                if use_long_attention is not None and use_long_attention != "local":
                     seq_len -= global_pos_idx.shape[1]
 
                 # Adjust the range variables.
@@ -895,7 +899,7 @@ class CoreAttention(MegatronModule):
         multi_query_attention=False,
         position_embedding_type='learned_absolute',
         use_flash_attention=False,
-        use_long_attention=None,  # None / local_only / global / tglobal / global_to_global / global_sep?
+        use_long_attention=None,  # None / local / global / tglobal / global_to_global / global_sep?
         local_context=128,
         global_block_size=16,
     ):
@@ -1005,7 +1009,7 @@ class CoreAttention(MegatronModule):
         # print(b, np, sq, sk, hn)
 
         use_long_attention = self.use_long_attention if ((self.use_long_attention is not None) and (sq > 1)) else None
-        causal = (self.attn_mask_type == AttnMaskType.causal) and (sq > 1)
+        causal = (self.attn_mask_type == AttnMaskType.causal)
         global_attn_separate = use_long_attention == "global_to_global"
 
         if use_long_attention and attention_mask is not None and len(attention_mask.shape) == 4:
@@ -1099,7 +1103,7 @@ class CoreAttention(MegatronModule):
                 context_layer = context_layer[:, :, -self.local_context :]
 
             sq_true = sq
-            if use_long_attention is not None:
+            if global_pos_idx is not None:
                 sq_true -= global_pos_idx.shape[1]
             nb = (sq_true + self.local_context - 1) // self.local_context
             context_layer = rearrange(context_layer, '(b nb) np sq hn -> b np (nb sq) hn', nb=nb)
