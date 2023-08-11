@@ -858,11 +858,9 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
                             relative_position
                         )
 
-                    encoder_self_attention_relative_position_bias = encoder_self_attention_relative_position_bias.transpose(
-                        0, 1
-                    )[
-                        None
-                    ]
+                    encoder_self_attention_relative_position_bias = encoder_self_attention_relative_position_bias
+
+
                 else:
                     if global_attn_separate:
                         relative_position_local, global_tokens = build_rel_pos_long_attention(

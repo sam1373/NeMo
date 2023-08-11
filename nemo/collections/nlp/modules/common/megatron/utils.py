@@ -521,13 +521,13 @@ def build_rel_pos_long_attention(
 
     if decoding:
 
-        relative_position_local = torch.arange(-128, 0)
-        relative_position_global = torch.arange(-1024, -1)
+        relative_position_local = torch.arange(-128, 0).to(torch.cuda.current_device())
+        relative_position_global = torch.arange(-1024, -1).to(torch.cuda.current_device())
 
         if not global_segment_pos_idx:
             relative_position_global *= global_block_size
 
-        return torch.cat((relative_position_global, relative_position_local))[None, :], 1024
+        return torch.cat((relative_position_global, relative_position_local))[None, None, :], 1024
 
     side_bias_idx = None
 
