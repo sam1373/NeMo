@@ -547,7 +547,7 @@ def build_rel_pos_long_attention(
                 side_bias_idx += 1
         elif seq_length >= global_block_size:
             side_bias_idx = torch.arange(
-                global_block_size // 2, seq_length - global_block_size // 2, global_block_size, device=device,
+                global_block_size // 2, seq_length + global_block_size // 2, global_block_size, device=device,
             )
             if get_mask and causal:
                 side_bias_idx += global_block_size // 2
