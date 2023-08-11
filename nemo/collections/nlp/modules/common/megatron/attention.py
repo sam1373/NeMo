@@ -632,8 +632,11 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                     else:
                         global_tokens = global_pos_idx.shape[1]
 
-                    self.inference_key_memory[:global_tokens] = key_layer[:global_tokens]
-                    self.inference_value_memory[:global_tokens] = value_layer[:global_tokens]
+                    # tmp max global tokens
+                    global_tokens_cache = 1024
+
+                    self.inference_key_memory[:min(global_tokens, global_tokens_cache)] = key_layer[max(0, global_tokens - global_tokens_cache):global_tokens]
+                    self.inference_value_memory[:min(global_tokens, global_tokens_cache)] = value_layer[max(0, global_tokens - global_tokens_cache):global_tokens]
 
                     self.inference_current_global_len = global_tokens
 
