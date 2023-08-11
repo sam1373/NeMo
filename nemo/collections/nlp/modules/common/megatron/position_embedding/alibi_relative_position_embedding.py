@@ -42,10 +42,8 @@ def build_slopes(num_attention_heads, num_attention_heads_alibi):
     """
     Builds a slopes tensor.
     """
-    slopes = (
-        torch.Tensor(get_slopes(num_attention_heads_alibi) + [0] * (num_attention_heads - num_attention_heads_alibi))
-        .unsqueeze(-1)
-        .unsqueeze(-1)
+    slopes = torch.Tensor(
+        get_slopes(num_attention_heads_alibi) + [0] * (num_attention_heads - num_attention_heads_alibi)
     )
 
     if torch.cuda.is_available():
@@ -140,9 +138,14 @@ class ALiBiRelativePositionEmbedding(torch.nn.Module):
 
     def get_bias(self, relative_position):
 
-        relative_position = relative_position.unsqueeze(1).expand(-1, self.num_attention_heads, -1, -1).abs()
+        if len(relative_position.shape) == 3:
+            relative_position = relative_position.unsqueeze(1).expand(-1, self.num_attention_heads, -1, -1).abs()
+            slopes = self.slopes.unsqueeze(-1).unsqueeze(-1)
+        else:
+            relative_position = relative_position.unsqueeze(1).expand(-1, self.num_attention_heads, -1).abs()
+            slopes = self.slopes.unsqueeze(-1)
 
         if torch.cuda.is_available():
             relative_position = relative_position.to(torch.cuda.current_device())
 
-        return -relative_position * self.slopes.to(torch.cuda.current_device())
+        return -relative_position * slopes.to(torch.cuda.current_device())

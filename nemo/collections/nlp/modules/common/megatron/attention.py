@@ -140,7 +140,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         use_long_attention=None,  # None / local / global / tglobal / global_to_global / global_limited
         local_context=128,
         global_block_size=16,
-        use_long_attn_decoding=False,
+        use_long_attn_decoding=True,
     ):
         super(ParallelAttention, self).__init__()
         self.layer_number = max(1, layer_number)
@@ -580,7 +580,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
 
                         start_local = -self.local_context + self.inference_current_local_len
                         self.inference_current_local_len += seq_len
-                        end_local = self.inference_current_local_len
+                        end_local = -self.local_context + self.inference_current_local_len
 
                         self.inference_key_memory[start_local:end_local, ...] = key_layer[-seq_len:]
                         self.inference_value_memory[start_local:end_local, ...] = value_layer[-seq_len:]
@@ -615,9 +615,22 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                         dim=0,
                     )
 
+                    relative_position_bias = torch.cat(
+                        (
+                            relative_position_bias[
+                                ..., -self.local_context - self.inference_current_global_len : -self.local_context
+                            ],
+                            relative_position_bias[..., -self.inference_current_local_len :],
+                        ),
+                        dim=-1,
+                    )
+
                 else:
                     ### store global and local
-                    global_tokens = global_pos_idx.shape[1]
+                    if global_pos_idx is None:
+                        global_tokens = 0
+                    else:
+                        global_tokens = global_pos_idx.shape[1]
 
                     self.inference_key_memory[:global_tokens] = key_layer[:global_tokens]
                     self.inference_value_memory[:global_tokens] = value_layer[:global_tokens]
@@ -1009,7 +1022,7 @@ class CoreAttention(MegatronModule):
         # print(b, np, sq, sk, hn)
 
         use_long_attention = self.use_long_attention if ((self.use_long_attention is not None) and (sq > 1)) else None
-        causal = (self.attn_mask_type == AttnMaskType.causal)
+        causal = self.attn_mask_type == AttnMaskType.causal
         global_attn_separate = use_long_attention == "global_to_global"
 
         if use_long_attention and attention_mask is not None and len(attention_mask.shape) == 4:
