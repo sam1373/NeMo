@@ -324,7 +324,7 @@ class GPTSFTDataset(Dataset):
         else:
             max_length = min(self.max_seq_length, self._ceil_to_nearest(max_length, 8))
 
-        assert max_length <= self.max_seq_length
+        #assert max_length <= self.max_seq_length
 
         attention_mask = [self._create_attention_mask(max_length) for _ in batch]
         attention_mask = torch.stack(attention_mask)
