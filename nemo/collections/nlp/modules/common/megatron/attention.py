@@ -415,11 +415,9 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                 inference_max_sequence_len, hidden_states.size(1), hidden_states.dtype, hidden_states.device
             )
 
-            if not self.use_long_attn_decoding:
-                self.inference_current_sequence_len = 0
-            else:
-                self.inference_current_local_len = 0
-                self.inference_current_global_len = 0
+            self.inference_current_sequence_len = 0
+            self.inference_current_local_len = 0
+            self.inference_current_global_len = 0
 
         # Some consistency check.
         if inference_max_sequence_len and not self.use_long_attn_decoding:
