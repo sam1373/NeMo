@@ -43,13 +43,12 @@ class GPTSFTDataset(Dataset):
         query_key: Optional[str] = None,
         separate_prompt_and_response_with_newline: bool = False,
         answer_only_loss: bool = True,
-        truncation_field: str = "context",
+        truncation_field: str = "answer",
         pad_to_max_length: bool = False,  # (@adithyare) allows for much faster training especially in PEFT settings.
         index_mapping_dir: str = None,
         prompt_template: str = None,
         virtual_tokens: int = 0,
         tokens_to_generate: int = 0,
-        memmap_workers: Optional[int] = None,
     ):
         """
         file_path: Path to a JSONL GPT supervised fine-tuning dataset. Data is formatted as multiple JSON lines with each line formatted as follows. {'input': 'John von Neumann\nVon Neumann made fundamental contributions .... Q: What did the math of artificial viscosity do?', 'output': 'smoothed the shock transition without sacrificing basic physics'}
@@ -65,7 +64,6 @@ class GPTSFTDataset(Dataset):
         seed: int = 1234,
         context_key: Key to use for the context in your JSONL file
         label_key: Key to use for the label in your JSONL file
-        query_key: Key to use for the query in your JSON file if we separete query from the context.
         separate_prompt_and_response_with_newline: Adds a newline between prompt and response.
         answer_only_loss: If True, will compute the loss only on the answer part of the input. If False, will compute the loss on the entire input.
         truncation_field: Field to use for truncation. (Options: "answer", "context"). Field to be used for truncation if the combined length exceeds the max sequence length.
@@ -100,11 +98,7 @@ class GPTSFTDataset(Dataset):
         assert self.truncation_field in ["answer", "context"]
 
         self.indexed_dataset = JSONLMemMapDataset(
-            dataset_paths=[file_path],
-            tokenizer=None,
-            header_lines=0,
-            index_mapping_dir=index_mapping_dir,
-            workers=memmap_workers,
+            dataset_paths=[file_path], tokenizer=None, header_lines=0, index_mapping_dir=index_mapping_dir
         )
 
         # Will be None after this call if `max_num_samples` is None
@@ -151,7 +145,7 @@ class GPTSFTDataset(Dataset):
         example = self.indexed_dataset[idx]
         return self._process_example(example)
 
-    def _process_prompt(self, context: str, label: str, query: str):
+    def _process_prompt(self, context, label, query):
         """
         Combine context, label, and query string into a unifed string.
         """
@@ -181,11 +175,11 @@ class GPTSFTDataset(Dataset):
             text = context + ' ' + label
 
         context_ids = self.tokenizer.text_to_ids(context)
-        answer_ids = self.tokenizer.text_to_ids(text[len(context):])
+        answer_ids = self.tokenizer.text_to_ids(text)[len(context_ids) :]
 
         return context_ids, answer_ids
 
-    def _process_truncation(self, context: str, label: str, query: str):
+    def _process_truncation(self, context, label, query):
         """
         Calculate total tokens and truncate context or label string.
         """
@@ -205,19 +199,19 @@ class GPTSFTDataset(Dataset):
         if total_ids > self.max_seq_length:
             truncation_length = total_ids - self.max_seq_length
             if self.truncation_field == "answer":
-                answer_ids = self.tokenizer.text_to_tokens(origin_label)
+                answer_ids = self.tokenizer.text_to_ids(origin_label)
                 assert len(answer_ids) >= truncation_length, 'answer is not long enough to truncate.'
                 answer_ids = answer_ids[: -min(truncation_length, len(answer_ids))]
-                label = self.tokenizer.tokens_to_text(answer_ids)
+                label = self.tokenizer.ids_to_text(answer_ids)
             elif self.truncation_field == "context":
-                context_ids = self.tokenizer.text_to_tokens(origin_context)
+                context_ids = self.tokenizer.text_to_ids(origin_context)
                 assert len(context_ids) >= truncation_length, 'context is not long enough to truncate.'
                 context_ids = context_ids[: -min(truncation_length, len(context_ids))]
-                context = self.tokenizer.tokens_to_text(context_ids)
+                context = self.tokenizer.ids_to_text(context_ids)
 
         return context, label
 
-    def _process_example(self, example: dict):
+    def _process_example(self, example):
         """
         Create an example by concatenating text and answer.
         Truncation is carried out when needed, but it is performed only on the prompt side.
@@ -256,7 +250,7 @@ class GPTSFTDataset(Dataset):
         if self.add_eos and self.tokens_to_generate == 0:
             input_ids = input_ids + [self.tokenizer.eos_id]
 
-        #assert len(input_ids) <= self.max_seq_length
+        assert len(input_ids) <= self.max_seq_length
 
         # store metadata in dataset, in case user may have keys required in the prediction json files
         metadata = {k: v for k, v in example.items() if k not in [self.context_key, self.label_key]}
@@ -324,7 +318,7 @@ class GPTSFTDataset(Dataset):
         else:
             max_length = min(self.max_seq_length, self._ceil_to_nearest(max_length, 8))
 
-        #assert max_length <= self.max_seq_length
+        assert max_length <= self.max_seq_length
 
         attention_mask = [self._create_attention_mask(max_length) for _ in batch]
         attention_mask = torch.stack(attention_mask)
