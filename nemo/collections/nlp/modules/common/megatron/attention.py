@@ -1033,6 +1033,10 @@ class CoreAttention(MegatronModule):
         if use_long_attention and attention_mask is not None and len(attention_mask.shape) == 4:
             attention_mask = ~torch.any(torch.eq(attention_mask, False), dim=3).squeeze(1)
 
+        if sq == 1:
+            attention_mask = None
+            causal = False
+
         # ==================================================
         # Update attention mask for inference. [b, np, sq, sk]
         # ==================================================
@@ -1485,7 +1489,7 @@ class CoreAttention(MegatronModule):
 
         if not (causal and self.use_flash_attention):
 
-            local_attention_mask = _get_local_attention_mask(
+            """local_attention_mask = _get_local_attention_mask(
                 ~attention_mask.squeeze(1), self.local_context, causal, attention_mask.device
             ).expand(-1, np, -1, -1, -1)
 
@@ -1496,14 +1500,14 @@ class CoreAttention(MegatronModule):
                 )
                 attention_mask[..., -local_attention_mask.shape[-1] :] = local_attention_mask
             else:
-                attention_mask = local_attention_mask
+                attention_mask = local_attention_mask"""
 
             if relative_position_bias is None:
                 if not self.use_flash_attention:
                     relative_position_bias = torch.where(attention_mask, 0.0, -1e10)
             else:
                 relative_position_bias = relative_position_bias[..., :nb, :, :sk]
-                relative_position_bias = relative_position_bias + torch.where(attention_mask, 0.0, -1e10)
+                #relative_position_bias = relative_position_bias + torch.where(attention_mask, 0.0, -1e10)
 
             """if causal and not global_attn_separate:
                 causal_mask = build_rel_pos_long_attention(
