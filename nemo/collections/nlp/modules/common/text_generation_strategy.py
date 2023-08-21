@@ -392,7 +392,9 @@ def model_inference_strategy_dispatcher(model, **args):
     if isinstance(model, MegatronGPTPromptLearningModel):
         return PromptLearningModelTextGenerationStrategy(model, **args)
     elif isinstance(model, MegatronGPTModel):
-        if model.cfg.get("use_long_attention", None) is not None:
+        if hasattr(model.model, 'use_long_attn_decoding') and model.model.use_long_attn_decoding:
+            return LimitedContextGPTModelTextGenerationStrategy(model)
+        if hasattr(model.model, 'module') and model.model.module.use_long_attn_decoding:
             return LimitedContextGPTModelTextGenerationStrategy(model)
         return GPTModelTextGenerationStrategy(model)
     elif isinstance(model, MegatronRetrievalModel):

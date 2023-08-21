@@ -181,7 +181,7 @@ class GPTModel(MegatronModule):
         self.share_embeddings_and_output_weights = share_embeddings_and_output_weights
         self.dtype = utils_funcs.dtype_from_precision(precision, megatron_amp_O2)
         self.use_long_attention = use_long_attention
-        self.use_long_attn_decoding = use_long_attention is not None
+        self.use_long_attn_decoding = use_long_attn_decoding
 
         if kv_channels is None:
             assert (

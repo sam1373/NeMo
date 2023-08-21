@@ -519,7 +519,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
         use_long_attention=None,
         local_context=128,
         global_block_size=16,
-        use_long_attn_decoding=False,
+        use_long_attn_decoding=True,
     ):
         super(TransformerLanguageModel, self).__init__(share_token_embeddings=share_embeddings_and_output_weights)
 
@@ -684,6 +684,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
             use_long_attention=use_long_attention,
             local_context=local_context,
             global_block_size=global_block_size,
+            use_long_attn_decoding=use_long_attn_decoding,
         )
         self._encoder_key = 'encoder'
 

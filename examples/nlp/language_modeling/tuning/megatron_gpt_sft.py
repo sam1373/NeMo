@@ -84,6 +84,9 @@ def _modify_config(gpt_cfg, cfg, add_cfg_to_tree=False):
         if 'use_long_attention' in cfg.model:
             gpt_cfg.use_long_attention = cfg.model.use_long_attention
 
+        if 'use_long_attn_decoding' in cfg.model:
+            gpt_cfg.use_long_attn_decoding = cfg.model.use_long_attn_decoding
+
         if 'position_embedding_type' in cfg.model:
             gpt_cfg.position_embedding_type = cfg.model.position_embedding_type
 
