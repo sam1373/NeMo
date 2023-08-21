@@ -362,7 +362,7 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
             use_long_attention=self.cfg.get('use_long_attention', None),
             local_context=self.cfg.get('local_context', 128),
             global_block_size=self.cfg.get('global_block_size', 16),
-            use_long_attn_decoding=self.cfg.get('use_long_attn_decoding', False),
+            use_long_attn_decoding=self.cfg.get('use_long_attn_decoding', True),
         )
 
         return model
