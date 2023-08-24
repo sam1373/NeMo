@@ -460,17 +460,17 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         """
 
         is_decoding = hidden_states.shape[0] == 1
-        # ?
+        use_long_attention = self.use_long_attention
 
-        if is_decoding and not self.use_long_attn_decoding:
-            use_long_attention = None
+        if is_decoding:
+            if not self.use_long_attn_decoding:
+                use_long_attention = None
         else:
             if self.use_long_attention == "tglobal" and hidden_states.shape[0] < self.global_block_size:
                 use_long_attention = "local"
-            else:
-                use_long_attention = self.use_long_attention
 
-        if not is_decoding and use_long_attention is not None and use_long_attention != "local":
+
+        if (not is_decoding) and (use_long_attention is not None) and use_long_attention != "local":
 
             global_pos_idx = torch.arange(
                 0, hidden_states.shape[0], self.global_block_size, device=hidden_states.device
@@ -587,6 +587,8 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                         start_local = -self.local_context + self.inference_current_local_len
                         self.inference_current_local_len += seq_len
                         end_local = -self.local_context + self.inference_current_local_len
+                        if end_local == 0:
+                            end_local = None
 
                         self.inference_key_memory[start_local:end_local, ...] = key_layer[-seq_len:]
                         self.inference_value_memory[start_local:end_local, ...] = value_layer[-seq_len:]
@@ -602,11 +604,15 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                         self.inference_key_memory[-seq_len:] = key_layer
                         self.inference_value_memory[-seq_len:] = value_layer
 
+                    last_local = -self.local_context + self.inference_current_local_len
+                    if last_local == 0:
+                        last_local = None
+
                     key_layer = torch.cat(
                         (
                             self.inference_key_memory[: self.inference_current_global_len],
                             self.inference_key_memory[
-                                -self.local_context : -self.local_context + self.inference_current_local_len
+                                -self.local_context : last_local
                             ],
                         ),
                         dim=0,
@@ -615,7 +621,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                         (
                             self.inference_value_memory[: self.inference_current_global_len],
                             self.inference_value_memory[
-                                -self.local_context : -self.local_context + self.inference_current_local_len
+                                -self.local_context : last_local
                             ],
                         ),
                         dim=0,
@@ -624,9 +630,9 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                     relative_position_bias = torch.cat(
                         (
                             relative_position_bias[
-                                ..., -self.local_context - self.inference_current_global_len : -self.local_context
+                                :, :, :, -self.local_context - self.inference_current_global_len : -self.local_context
                             ],
-                            relative_position_bias[..., -self.inference_current_local_len :],
+                            relative_position_bias[:, :, :, -self.inference_current_local_len :],
                         ),
                         dim=-1,
                     )
@@ -648,16 +654,16 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
 
                     local_tokens = min(self.local_context, key_layer.shape[0] - global_tokens)
 
-                    if local_tokens == self.local_context:
-                        self.inference_key_memory[-self.local_context:] = key_layer[-self.local_context:]
-                        self.inference_value_memory[-self.local_context:] = value_layer[-self.local_context:]
-                    else:
-                        self.inference_key_memory[-self.local_context : -self.local_context + local_tokens] = key_layer[
-                            -local_tokens:
-                        ]
-                        self.inference_value_memory[
-                            -self.local_context : -self.local_context + local_tokens
-                        ] = value_layer[-local_tokens:]
+                    last_local = -self.local_context + local_tokens
+                    if last_local == 0:
+                        last_local = None
+
+                    self.inference_key_memory[-self.local_context : last_local] = key_layer[
+                        -local_tokens:
+                    ]
+                    self.inference_value_memory[
+                        -self.local_context : last_local
+                    ] = value_layer[-local_tokens:]
 
                     self.inference_current_local_len = local_tokens
             else:
