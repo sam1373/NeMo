@@ -800,8 +800,8 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
         use_long_attention = self.use_long_attention
         is_decoding = encoder_input.size(0) == 1
 
-        if is_decoding and use_long_attention and not self.use_long_attn_decoding:
-            use_long_attention = None
+        #if is_decoding and use_long_attention and not self.use_long_attn_decoding:
+        #    use_long_attention = None
 
         # enc_attn_mask: [1, 1, s, s]
         if inference_max_sequence_len is not None and use_long_attention is None:

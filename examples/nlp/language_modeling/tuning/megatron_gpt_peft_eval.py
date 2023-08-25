@@ -148,6 +148,12 @@ def main(cfg) -> None:
         if 'use_long_attention' in cfg.model:
             peft_model_cfg.use_long_attention = cfg.model.use_long_attention
 
+        if 'use_long_attn_decoding' in cfg.model:
+            peft_model_cfg.use_long_attn_decoding = cfg.model.use_long_attn_decoding
+
+        if 'position_embedding_type' in cfg.model:
+            peft_model_cfg.position_embedding_type = cfg.model.position_embedding_type
+
     with open_dict(cfg):
         # update the config with the trained model config
         # required for hydra interpolation to work inside cfg.inference

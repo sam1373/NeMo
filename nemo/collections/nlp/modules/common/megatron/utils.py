@@ -551,7 +551,7 @@ def build_rel_pos_long_attention(
             )
             if get_mask and causal:
                 side_bias_idx += global_block_size // 2
-    elif use_long_attention != "local_only":
+    elif use_long_attention != "local":
 
         side_bias_idx = torch.arange(0, seq_length, global_block_size, device=device)
 
