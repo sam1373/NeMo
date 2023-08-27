@@ -545,6 +545,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
         self.local_context = local_context
         self.global_block_size = global_block_size
         self.use_long_attn_decoding = use_long_attn_decoding
+        self.use_flash_attention = use_flash_attention
         embedding_init_method_std = 0.02
         if kv_channels is None:
 
@@ -888,6 +889,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
                             relative_position_global_bias,
                         )
                     else:
+                        vector_only = self.position_embedding_type == "alibi" and self.use_flash_attention
                         relative_position, global_tokens, causal_mask = build_rel_pos_long_attention(
                             seq_length=enc_seq_length,
                             use_long_attention=self.use_long_attention,
@@ -896,7 +898,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
                             global_segment_pos_idx=longt5_rel,
                             causal=True,
                             get_mask=True,
-                            vector_only=self.position_embedding_type == "alibi",
+                            vector_only=vector_only,
                         )
 
                         if longt5_rel:
@@ -911,18 +913,6 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
                         encoder_self_attention_relative_position_bias += torch.where(
                             causal_mask.unsqueeze(1), -1e10, 0
                         )
-                        """
-                        if self.position_embedding_type == 'alibi':
-                            full_bias = encoder_self_attention_relative_position_bias
-                            encoder_self_attention_relative_position_bias = encoder_self_attention_relative_position_bias[
-                                :, :, -1
-                            ].unsqueeze(
-                                2
-                            )
-                            encoder_self_attention_relative_position_bias[:, :, 0, :global_tokens] = full_bias[
-                                :, :, 0, :global_tokens
-                            ]
-                            del full_bias"""
 
                         encoder_self_attention_relative_position_bias = encoder_self_attention_relative_position_bias.transpose(
                             0, 1
