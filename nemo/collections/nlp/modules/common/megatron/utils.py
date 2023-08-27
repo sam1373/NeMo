@@ -517,6 +517,7 @@ def build_rel_pos_long_attention(
     causal=False,
     get_mask=False,
     decoding=False,
+    vector_only=False,
 ):
 
     if decoding:
@@ -526,6 +527,7 @@ def build_rel_pos_long_attention(
 
         if not global_segment_pos_idx:
             relative_position_global *= global_block_size
+            relative_position_global -= local_context
 
         return torch.cat((relative_position_global, relative_position_local))[None, None, :], 1024
 
@@ -556,7 +558,10 @@ def build_rel_pos_long_attention(
         side_bias_idx = torch.arange(0, seq_length, global_block_size, device=device)
 
     memory_position = torch.arange((3 - causal) * local_context, dtype=torch.long, device=device)
-    context_position = memory_position[local_context : local_context * 2]
+    if vector_only:
+        context_position = memory_position[local_context * 2 - 1].unsqueeze(0)
+    else:
+        context_position = memory_position[local_context : local_context * 2]
     relative_position = memory_position[None, :] - context_position[:, None]
     relative_position = relative_position[None, :].expand(num_blocks, -1, -1)
 
@@ -569,9 +574,13 @@ def build_rel_pos_long_attention(
         else:
             context_position = torch.arange(seq_length + pad_len, device=side_bias_idx.device)
 
-        relative_position_side = side_bias_idx[None, :] - context_position[:, None]
-
-        relative_position_side = relative_position_side.reshape(num_blocks, local_context, -1)
+        if not vector_only:
+            relative_position_side = side_bias_idx[None, :] - context_position[:, None]
+            relative_position_side = relative_position_side.reshape(num_blocks, local_context, -1)
+        else:
+            context_position = context_position[0::local_context]
+            relative_position_side = side_bias_idx[None, :] - context_position[:, None]
+            relative_position_side = relative_position_side.reshape(num_blocks, 1, -1)
 
         relative_position = torch.cat((relative_position_side, relative_position), dim=-1)
 
@@ -579,8 +588,17 @@ def build_rel_pos_long_attention(
 
     if get_mask:
         mask = relative_position > 0
-        mask[0, :, :local_context] = True
+        mask[0, :, :local_context+global_tokens] = True
+
+        if not global_segment_pos_idx:
+            relative_position[:, :, :global_tokens] -= local_context
+
+        #print(relative_position)
+        #print(mask.sum(-1))
+
         return relative_position, global_tokens, mask
+
+
 
     # block, q, kv
 

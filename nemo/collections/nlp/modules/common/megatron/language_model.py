@@ -896,6 +896,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
                             global_segment_pos_idx=longt5_rel,
                             causal=True,
                             get_mask=True,
+                            vector_only=self.position_embedding_type == "alibi",
                         )
 
                         if longt5_rel:
@@ -910,7 +911,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
                         encoder_self_attention_relative_position_bias += torch.where(
                             causal_mask.unsqueeze(1), -1e10, 0
                         )
-
+                        """
                         if self.position_embedding_type == 'alibi':
                             full_bias = encoder_self_attention_relative_position_bias
                             encoder_self_attention_relative_position_bias = encoder_self_attention_relative_position_bias[
@@ -921,7 +922,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
                             encoder_self_attention_relative_position_bias[:, :, 0, :global_tokens] = full_bias[
                                 :, :, 0, :global_tokens
                             ]
-                            del full_bias
+                            del full_bias"""
 
                         encoder_self_attention_relative_position_bias = encoder_self_attention_relative_position_bias.transpose(
                             0, 1

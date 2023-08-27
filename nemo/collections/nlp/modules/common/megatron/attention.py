@@ -285,6 +285,8 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         self.inference_key_memory = None
         self.inference_value_memory = None
         self.inference_current_sequence_len = 0
+        self.inference_current_local_len = 0
+        self.inference_current_global_len = 0
 
         # relative position embedding
         self.layer_type = layer_type
@@ -469,12 +471,19 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
             if self.use_long_attention == "tglobal" and hidden_states.shape[0] < self.global_block_size:
                 use_long_attention = "local"
 
+        #if self.layer_number == 1:
+        #    print("hidden shape", hidden_states.shape)
+        #    print("is_decoding", is_decoding)
+        #    print("use_long_attention", use_long_attention)
 
         if (not is_decoding) and (use_long_attention is not None) and use_long_attention != "local":
 
             global_pos_idx = torch.arange(
                 0, hidden_states.shape[0], self.global_block_size, device=hidden_states.device
             )
+
+            #if self.layer_number == 1:
+            #    print("global_pos_idx", global_pos_idx)
 
             if use_long_attention == "tglobal":
                 global_hidden_states = _pad_to_multiple(hidden_states, self.global_block_size, 0)
@@ -697,6 +706,10 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                         q_pos_emb = q_pos_emb[:end, :, :, :]
                     k_pos_emb = k_pos_emb[:end, :, :, :]
                     rotary_pos_emb = (q_pos_emb, k_pos_emb)
+
+        #if self.layer_number == 1:
+        #    print(self.inference_current_sequence_len, self.inference_current_local_len,
+        #          self.inference_current_global_len)
 
         if layer_past is not None:
             past_key, past_value = layer_past
@@ -1129,6 +1142,9 @@ class CoreAttention(MegatronModule):
         # relative_position_bias [b, np, sq, sk]
         # context_layer [b, np, sq, hn]
         # ==================================================
+        #if self.layer_number == 1:
+        #    print('query_layer', query_layer.shape)
+        #    print('key_layer', key_layer.shape)
         context_layer = self.attn_fn(query_layer, key_layer, value_layer, attention_mask, relative_position_bias)
 
         if use_long_attention:
