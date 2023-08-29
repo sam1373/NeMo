@@ -93,6 +93,9 @@ def _modify_config(gpt_cfg, cfg, add_cfg_to_tree=False):
         if 'apply_query_key_layer_scaling' in cfg.model:
             gpt_cfg.apply_query_key_layer_scaling = cfg.model.apply_query_key_layer_scaling
 
+        if 'global_block_size' in cfg.model:
+            gpt_cfg.global_block_size = cfg.model.global_block_size
+
         sft_cls = MegatronGPTSFTModel
         gpt_cfg.target = f"{sft_cls.__module__}.{sft_cls.__name__}"
 
