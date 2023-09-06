@@ -512,7 +512,10 @@ def build_rel_pos_long_attention(
     seq_length,
     use_long_attention,
     local_context,
+    global_tokens_at_start,
+    relative_distance_limit,
     global_block_size,
+    global_tokens_cache,
     global_segment_pos_idx=False,
     causal=False,
     get_mask=False,
@@ -522,14 +525,14 @@ def build_rel_pos_long_attention(
 
     if decoding:
 
-        relative_position_local = torch.arange(-127, 1).to(torch.cuda.current_device())
-        relative_position_global = torch.arange(-1023, 0).to(torch.cuda.current_device())
+        relative_position_local = torch.arange(-local_context + 1, 1).to(torch.cuda.current_device())
+        relative_position_global = torch.arange(-global_tokens_cache + 1, 0).to(torch.cuda.current_device())
 
         if not global_segment_pos_idx:
             relative_position_global *= global_block_size
             relative_position_global -= local_context
 
-        return torch.cat((relative_position_global, relative_position_local))[None, None, :], 1024
+        return torch.cat((relative_position_global, relative_position_local))[None, None, :], global_tokens_cache
 
     side_bias_idx = None
 
@@ -538,34 +541,17 @@ def build_rel_pos_long_attention(
     pad_len = -seq_length % local_context
     num_blocks = (seq_length + pad_len) // local_context
 
-    if use_long_attention == "tglobal":
-        if global_segment_pos_idx:
-            side_bias_idx = torch.arange((seq_length + global_block_size - 1) // global_block_size, device=device,)
-            context_global_block_idx = side_bias_idx.repeat_interleave(global_block_size)
-            context_global_block_idx = F.pad(
-                context_global_block_idx, (0, seq_length + pad_len - context_global_block_idx.shape[0])
-            )
-            if get_mask and causal:
-                side_bias_idx += 1
-        elif seq_length >= global_block_size:
-            side_bias_idx = torch.arange(
-                global_block_size // 2, seq_length + global_block_size // 2, global_block_size, device=device,
-            )
-            if get_mask and causal:
-                side_bias_idx += global_block_size // 2
-    elif use_long_attention != "local":
-
-        side_bias_idx = torch.arange(0, seq_length, global_block_size, device=device)
-
     memory_position = torch.arange((3 - causal) * local_context, dtype=torch.long, device=device)
     if vector_only:
         context_position = memory_position[local_context * 2 - 1].unsqueeze(0)
     else:
-        context_position = memory_position[local_context : local_context * 2]
+        context_position = memory_position[local_context: local_context * 2]
     relative_position = memory_position[None, :] - context_position[:, None]
     relative_position = relative_position[None, :].expand(num_blocks, -1, -1)
 
     global_tokens = 0
+
+    side_bias_idx = get_global_token_idx(use_long_attention, global_block_size, global_tokens_at_start, seq_length, pad_len, device, causal, get_mask, global_segment_pos_idx)
 
     if side_bias_idx is not None:
 
@@ -586,6 +572,9 @@ def build_rel_pos_long_attention(
 
         global_tokens = relative_position_side.shape[-1]
 
+    relative_position[relative_position > relative_distance_limit] = relative_distance_limit
+    relative_position[relative_position < -relative_distance_limit] = -relative_distance_limit
+
     if get_mask:
         mask = relative_position > 0
         mask[0, :, :local_context+global_tokens] = True
@@ -593,8 +582,6 @@ def build_rel_pos_long_attention(
         if not global_segment_pos_idx:
             relative_position[:, :, :global_tokens] -= local_context
 
-        #print(relative_position)
-        #print(mask.sum(-1))
 
         return relative_position, global_tokens, mask
 
@@ -603,3 +590,30 @@ def build_rel_pos_long_attention(
     # block, q, kv
 
     return relative_position, global_tokens
+
+def get_global_token_idx(use_long_attention, global_block_size, global_tokens_at_start, seq_length, pad_len, device, causal, get_mask, global_segment_pos_idx):
+    if use_long_attention == "tglobal":
+        assert global_tokens_at_start == 0
+        if global_segment_pos_idx:
+            side_bias_idx = torch.arange((seq_length + global_block_size - 1) // global_block_size, device=device,)
+            context_global_block_idx = side_bias_idx.repeat_interleave(global_block_size)
+            context_global_block_idx = F.pad(
+                context_global_block_idx, (0, seq_length + pad_len - context_global_block_idx.shape[0])
+            )
+            if get_mask and causal:
+                side_bias_idx += 1
+        elif seq_length >= global_block_size:
+            side_bias_idx = torch.arange(
+                global_block_size // 2, seq_length + global_block_size // 2, global_block_size, device=device,
+            )
+            if get_mask and causal:
+                side_bias_idx += global_block_size // 2
+    elif use_long_attention == "global_start_only":
+        assert global_tokens_at_start > 0
+        side_bias_idx = torch.arange(global_tokens_at_start, device=device)
+    elif use_long_attention != "local":
+        side_bias_idx = torch.arange(global_tokens_at_start, seq_length, global_block_size, device=device)
+        if global_tokens_at_start > 0:
+            side_bias_idx = torch.cat((torch.arange(0, global_tokens_at_start, device=device), side_bias_idx))
+
+    return side_bias_idx

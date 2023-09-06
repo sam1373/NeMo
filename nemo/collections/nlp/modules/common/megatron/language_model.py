@@ -129,6 +129,9 @@ def get_language_model(
     local_context=128,
     global_block_size=16,
     use_long_attn_decoding=False,
+    global_tokens_at_start=128,
+    global_tokens_cache=1024,
+    relative_distance_limit=4096,
 ):
     """Build language model and return along with the key to save."""
 
@@ -209,6 +212,9 @@ def get_language_model(
         local_context=local_context,
         global_block_size=global_block_size,
         use_long_attn_decoding=use_long_attn_decoding,
+        global_tokens_at_start=global_tokens_at_start,
+        global_tokens_cache=global_tokens_cache,
+        relative_distance_limit=relative_distance_limit,
     )
     # key used for checkpoints.
     language_model_key = 'language_model'
@@ -520,6 +526,9 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
         local_context=128,
         global_block_size=16,
         use_long_attn_decoding=True,
+        global_tokens_at_start=128,
+        global_tokens_cache=1024,
+        relative_distance_limit=4096,
     ):
         super(TransformerLanguageModel, self).__init__(share_token_embeddings=share_embeddings_and_output_weights)
 
@@ -546,6 +555,9 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
         self.global_block_size = global_block_size
         self.use_long_attn_decoding = use_long_attn_decoding
         self.use_flash_attention = use_flash_attention
+        self.global_tokens_at_start = global_tokens_at_start
+        self.global_tokens_cache = global_tokens_cache
+        self.relative_distance_limit = relative_distance_limit
         embedding_init_method_std = 0.02
         if kv_channels is None:
 
@@ -686,6 +698,8 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
             local_context=local_context,
             global_block_size=global_block_size,
             use_long_attn_decoding=use_long_attn_decoding,
+            global_tokens_at_start=global_tokens_at_start,
+            global_tokens_cache=global_tokens_cache,
         )
         self._encoder_key = 'encoder'
 
@@ -845,7 +859,10 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
                         seq_length=enc_seq_length,
                         use_long_attention=self.use_long_attention,
                         local_context=self.local_context,
+                        global_tokens_at_start=self.global_tokens_at_start,
+                        relative_distance_limit=self.relative_distance_limit,
                         global_block_size=self.global_block_size,
+                        global_tokens_cache=self.global_tokens_cache,
                         global_segment_pos_idx=longt5_rel,
                         causal=True,
                         decoding=True,
@@ -894,7 +911,10 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
                             seq_length=enc_seq_length,
                             use_long_attention=self.use_long_attention,
                             local_context=self.local_context,
+                            global_tokens_at_start=self.global_tokens_at_start,
+                            relative_distance_limit=self.relative_distance_limit,
                             global_block_size=self.global_block_size,
+                            global_tokens_cache=self.global_tokens_cache,
                             global_segment_pos_idx=longt5_rel,
                             causal=True,
                             get_mask=True,

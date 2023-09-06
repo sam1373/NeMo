@@ -149,6 +149,8 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         local_context=128,
         global_block_size=16,
         use_long_attn_decoding=True,
+        global_tokens_at_start=128,
+        global_tokens_cache=1024,
     ):
         super(ParallelAttention, self).__init__()
         self.layer_number = max(1, layer_number)
@@ -428,6 +430,8 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
             self.inference_current_sequence_len = 0
             self.inference_current_local_len = 0
             self.inference_current_global_len = 0
+
+            self.inference_current_block_len = 0
 
         # Some consistency check.
         if inference_max_sequence_len and not self.use_long_attn_decoding:

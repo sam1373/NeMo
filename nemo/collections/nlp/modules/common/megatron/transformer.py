@@ -176,6 +176,8 @@ class ParallelTransformerLayer_(MegatronModule, adapter_mixins.AdapterModuleMixi
         local_context=128,
         global_block_size=16,
         use_long_attn_decoding=True,
+        global_tokens_at_start=128,
+        global_tokens_cache=1024,
     ):
         super(ParallelTransformerLayer_, self).__init__()
 
@@ -267,6 +269,8 @@ class ParallelTransformerLayer_(MegatronModule, adapter_mixins.AdapterModuleMixi
                 local_context=local_context,
                 global_block_size=global_block_size,
                 use_long_attn_decoding=use_long_attn_decoding,
+                global_tokens_at_start=global_tokens_at_start,
+                global_tokens_cache=global_tokens_cache,
             )
 
             if transformer_block_type == 'normformer':
@@ -709,6 +713,8 @@ class ParallelTransformerLayer(ParallelTransformerLayer_):
         local_context=128,
         global_block_size=16,
         use_long_attn_decoding=True,
+        global_tokens_at_start=128,
+        global_tokens_cache=1024,
     ):
         super(ParallelTransformerLayer, self).__init__(
             init_method=init_method,
@@ -756,6 +762,8 @@ class ParallelTransformerLayer(ParallelTransformerLayer_):
             local_context=local_context,
             global_block_size=global_block_size,
             use_long_attn_decoding=use_long_attn_decoding,
+            global_tokens_at_start=global_tokens_at_start,
+            global_tokens_cache=global_tokens_cache,
         )
 
         # Dtype for forward pass - ignore amp O2
@@ -974,6 +982,8 @@ class ParallelTransformer(MegatronModule):
         local_context=128,
         global_block_size=16,
         use_long_attn_decoding=True,
+        global_tokens_at_start=128,
+        global_tokens_cache=1024,
     ):
         super(ParallelTransformer, self).__init__()
 
@@ -1159,6 +1169,8 @@ class ParallelTransformer(MegatronModule):
                     local_context=local_context,
                     global_block_size=global_block_size,
                     use_long_attn_decoding=use_long_attn_decoding,
+                    global_tokens_at_start=global_tokens_at_start,
+                    global_tokens_cache=global_tokens_cache,
                 )
 
         if parallel_state.get_virtual_pipeline_model_parallel_world_size() is not None:

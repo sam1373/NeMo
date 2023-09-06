@@ -186,6 +186,7 @@ def main(cfg) -> None:
         trainer=trainer,
         override_config_path=peft_model_cfg,
         save_restore_connector=save_restore_connector,
+        strict=False,
     )
 
     model.freeze()
