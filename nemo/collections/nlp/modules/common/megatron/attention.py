@@ -166,6 +166,8 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         self.use_long_attention = use_long_attention
         self.local_context = local_context
         self.global_block_size = global_block_size
+        self.global_tokens_at_start = global_tokens_at_start
+        self.global_tokens_cache = global_tokens_cache
 
         self.use_long_attn_decoding = use_long_attn_decoding
 
@@ -448,23 +450,6 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         # Query, Key, and Value
         # =====================
 
-        """
-        if self.use_long_attention == 'tglobal':
-            # batch_size, seq_len, hidden_size
-            hidden_states = hidden_states.transpose(1, 0)
-            block_ids, global_segment_ids = make_global_fixed_block_ids(
-                (~attention_mask.squeeze(1)).long() if attention_mask is not None else torch.ones(
-                    hidden_states.shape[:-1]),
-                self.global_block_size,
-            )
-            global_tokens_len = global_segment_ids.shape[-1]
-            global_tokens = create_global_aggregates(hidden_states, block_ids, global_tokens_len)
-            global_tokens = self.global_norm(global_tokens)
-            hidden_states = torch.cat((hidden_states, global_tokens), dim=1)
-            # seq_len, batch_size, hidden_size
-            hidden_states = hidden_states.transpose(1, 0)
-        """
-
         is_decoding = hidden_states.shape[0] == 1
         use_long_attention = self.use_long_attention
 
@@ -475,19 +460,16 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
             if self.use_long_attention == "tglobal" and hidden_states.shape[0] < self.global_block_size:
                 use_long_attention = "local"
 
-        #if self.layer_number == 1:
-        #    print("hidden shape", hidden_states.shape)
-        #    print("is_decoding", is_decoding)
-        #    print("use_long_attention", use_long_attention)
-
         if (not is_decoding) and (use_long_attention is not None) and use_long_attention != "local":
 
-            global_pos_idx = torch.arange(
-                0, hidden_states.shape[0], self.global_block_size, device=hidden_states.device
-            )
-
-            #if self.layer_number == 1:
-            #    print("global_pos_idx", global_pos_idx)
+            if use_long_attention == "global_start_only":
+                global_pos_idx = torch.arange(0, self.global_tokens_at_start, device=hidden_states.device)
+            else:
+                global_pos_idx = torch.arange(
+                    self.global_tokens_at_start, hidden_states.shape[0], self.global_block_size, device=hidden_states.device
+                )
+                if self.global_tokens_at_start > 0:
+                    global_pos_idx = torch.cat((torch.arange(0, self.global_tokens_at_start, device=hidden_states.device), global_pos_idx))
 
             if use_long_attention == "tglobal":
                 global_hidden_states = _pad_to_multiple(hidden_states, self.global_block_size, 0)
@@ -657,8 +639,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                     else:
                         global_tokens = global_pos_idx.shape[1]
 
-                    # tmp max global tokens
-                    global_tokens_cache = 1024
+                    global_tokens_cache = self.global_tokens_cache
 
                     self.inference_key_memory[:min(global_tokens, global_tokens_cache)] = key_layer[max(0, global_tokens - global_tokens_cache):global_tokens]
                     self.inference_value_memory[:min(global_tokens, global_tokens_cache)] = value_layer[max(0, global_tokens - global_tokens_cache):global_tokens]

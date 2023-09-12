@@ -534,8 +534,6 @@ def build_rel_pos_long_attention(
 
         return torch.cat((relative_position_global, relative_position_local))[None, None, :], global_tokens_cache
 
-    side_bias_idx = None
-
     device = torch.cuda.current_device()
 
     pad_len = -seq_length % local_context
@@ -551,7 +549,7 @@ def build_rel_pos_long_attention(
 
     global_tokens = 0
 
-    side_bias_idx = get_global_token_idx(use_long_attention, global_block_size, global_tokens_at_start, seq_length, pad_len, device, causal, get_mask, global_segment_pos_idx)
+    side_bias_idx, context_global_block_idx = get_global_token_idx(use_long_attention, global_block_size, global_tokens_at_start, seq_length, pad_len, device, causal, get_mask, global_segment_pos_idx)
 
     if side_bias_idx is not None:
 
@@ -572,26 +570,31 @@ def build_rel_pos_long_attention(
 
         global_tokens = relative_position_side.shape[-1]
 
-    relative_position[relative_position > relative_distance_limit] = relative_distance_limit
-    relative_position[relative_position < -relative_distance_limit] = -relative_distance_limit
+
 
     if get_mask:
         mask = relative_position > 0
-        mask[0, :, :local_context+global_tokens] = True
+        mask[0, :, :global_tokens+local_context] = True
 
         if not global_segment_pos_idx:
-            relative_position[:, :, :global_tokens] -= local_context
+            #relative_position[:, :, :global_tokens] -= local_context
 
+            global_too_close = relative_position[:, :, :global_tokens] >= -local_context
+            mask[:, :, :global_tokens][global_too_close] = True
+
+        relative_position = torch.clamp(relative_position, -relative_distance_limit, relative_distance_limit)
 
         return relative_position, global_tokens, mask
 
-
+    relative_position = torch.clamp(relative_position.clone(), -relative_distance_limit, relative_distance_limit)
 
     # block, q, kv
 
     return relative_position, global_tokens
 
 def get_global_token_idx(use_long_attention, global_block_size, global_tokens_at_start, seq_length, pad_len, device, causal, get_mask, global_segment_pos_idx):
+    side_bias_idx = None
+    context_global_block_idx = None
     if use_long_attention == "tglobal":
         assert global_tokens_at_start == 0
         if global_segment_pos_idx:
@@ -616,4 +619,4 @@ def get_global_token_idx(use_long_attention, global_block_size, global_tokens_at
         if global_tokens_at_start > 0:
             side_bias_idx = torch.cat((torch.arange(0, global_tokens_at_start, device=device), side_bias_idx))
 
-    return side_bias_idx
+    return side_bias_idx, context_global_block_idx

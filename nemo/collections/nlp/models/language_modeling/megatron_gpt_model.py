@@ -363,6 +363,9 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
             local_context=self.cfg.get('local_context', 128),
             global_block_size=self.cfg.get('global_block_size', 16),
             use_long_attn_decoding=self.cfg.get('use_long_attn_decoding', False),
+            global_tokens_at_start=self.cfg.get('global_tokens_at_start', 128),
+            global_tokens_cache=self.cfg.get('global_tokens_cache', 1024),
+            relative_distance_limit=self.cfg.get('relative_distance_limit', 4096),
         )
 
         return model
