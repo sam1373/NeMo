@@ -96,6 +96,9 @@ def _modify_config(gpt_cfg, cfg, add_cfg_to_tree=False):
         if 'global_block_size' in cfg.model:
             gpt_cfg.global_block_size = cfg.model.global_block_size
 
+        if 'local_context' in cfg.model:
+            gpt_cfg.local_context = cfg.model.local_context
+
         sft_cls = MegatronGPTSFTModel
         gpt_cfg.target = f"{sft_cls.__module__}.{sft_cls.__name__}"
 
