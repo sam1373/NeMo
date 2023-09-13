@@ -151,6 +151,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         use_long_attn_decoding=True,
         global_tokens_at_start=128,
         global_tokens_cache=1024,
+        relative_distance_limit=4096,
     ):
         super(ParallelAttention, self).__init__()
         self.layer_number = max(1, layer_number)
@@ -168,6 +169,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         self.global_block_size = global_block_size
         self.global_tokens_at_start = global_tokens_at_start
         self.global_tokens_cache = global_tokens_cache
+        self.relative_distance_limit = relative_distance_limit
 
         self.use_long_attn_decoding = use_long_attn_decoding
 
@@ -263,6 +265,8 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
             use_long_attention=use_long_attention,
             local_context=local_context,
             global_block_size=global_block_size,
+            global_tokens_at_start=global_tokens_at_start,
+            relative_distance_limit=relative_distance_limit,
         )
 
         # Output.
@@ -466,10 +470,15 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                 global_pos_idx = torch.arange(0, self.global_tokens_at_start, device=hidden_states.device)
             else:
                 global_pos_idx = torch.arange(
-                    self.global_tokens_at_start, hidden_states.shape[0], self.global_block_size, device=hidden_states.device
+                    self.global_tokens_at_start,
+                    hidden_states.shape[0],
+                    self.global_block_size,
+                    device=hidden_states.device,
                 )
                 if self.global_tokens_at_start > 0:
-                    global_pos_idx = torch.cat((torch.arange(0, self.global_tokens_at_start, device=hidden_states.device), global_pos_idx))
+                    global_pos_idx = torch.cat(
+                        (torch.arange(0, self.global_tokens_at_start, device=hidden_states.device), global_pos_idx)
+                    )
 
             if use_long_attention == "tglobal":
                 global_hidden_states = _pad_to_multiple(hidden_states, self.global_block_size, 0)
@@ -606,31 +615,50 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                     key_layer = torch.cat(
                         (
                             self.inference_key_memory[: self.inference_current_global_len],
-                            self.inference_key_memory[
-                                -self.local_context : last_local
-                            ],
+                            self.inference_key_memory[-self.local_context : last_local],
                         ),
                         dim=0,
                     )
                     value_layer = torch.cat(
                         (
                             self.inference_value_memory[: self.inference_current_global_len],
-                            self.inference_value_memory[
-                                -self.local_context : last_local
-                            ],
+                            self.inference_value_memory[-self.local_context : last_local],
                         ),
                         dim=0,
                     )
 
-                    relative_position_bias = torch.cat(
-                        (
-                            relative_position_bias[
-                                :, :, :, -self.local_context - self.inference_current_global_len : -self.local_context
-                            ],
-                            relative_position_bias[:, :, :, -self.inference_current_local_len :],
-                        ),
-                        dim=-1,
-                    )
+                    if relative_position_bias is not None:
+                        relative_position_bias = torch.cat(
+                            (
+                                relative_position_bias[
+                                    :,
+                                    :,
+                                    :,
+                                    -self.local_context - self.inference_current_global_len : -self.local_context,
+                                ],
+                                relative_position_bias[:, :, :, -self.inference_current_local_len :],
+                            ),
+                            dim=-1,
+                        )
+
+                    if rotary_pos_emb is not None:
+                        q_pos_emb, k_pos_emb = rotary_pos_emb
+                        q_pos_emb = q_pos_emb[self.inference_current_local_len - 1 : self.inference_current_local_len]
+
+                        k_pos_emb_new = k_pos_emb[: self.inference_current_local_len, :, :, :]
+
+                        if self.inference_current_global_len > 0:
+                            k_start = -k_pos_emb[
+                                self.relative_distance_limit
+                                - self.inference_current_local_len : self.relative_distance_limit
+                                - self.inference_current_local_len
+                                + 1
+                            ]
+                            k_start = k_start.repeat(self.inference_current_global_len, 1, 1, 1)
+
+                            k_pos_emb_new = torch.cat((k_start, k_pos_emb_new), dim=0)
+
+                        rotary_pos_emb = (q_pos_emb, k_pos_emb_new)
 
                 else:
                     ### store global and local
@@ -641,8 +669,12 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
 
                     global_tokens_cache = self.global_tokens_cache
 
-                    self.inference_key_memory[:min(global_tokens, global_tokens_cache)] = key_layer[max(0, global_tokens - global_tokens_cache):global_tokens]
-                    self.inference_value_memory[:min(global_tokens, global_tokens_cache)] = value_layer[max(0, global_tokens - global_tokens_cache):global_tokens]
+                    self.inference_key_memory[: min(global_tokens, global_tokens_cache)] = key_layer[
+                        max(0, global_tokens - global_tokens_cache) : global_tokens
+                    ]
+                    self.inference_value_memory[: min(global_tokens, global_tokens_cache)] = value_layer[
+                        max(0, global_tokens - global_tokens_cache) : global_tokens
+                    ]
 
                     self.inference_current_global_len = global_tokens
 
@@ -652,12 +684,8 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                     if last_local == 0:
                         last_local = None
 
-                    self.inference_key_memory[-self.local_context : last_local] = key_layer[
-                        -local_tokens:
-                    ]
-                    self.inference_value_memory[
-                        -self.local_context : last_local
-                    ] = value_layer[-local_tokens:]
+                    self.inference_key_memory[-self.local_context : last_local] = key_layer[-local_tokens:]
+                    self.inference_value_memory[-self.local_context : last_local] = value_layer[-local_tokens:]
 
                     self.inference_current_local_len = local_tokens
             else:
@@ -692,7 +720,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                     k_pos_emb = k_pos_emb[:end, :, :, :]
                     rotary_pos_emb = (q_pos_emb, k_pos_emb)
 
-        #if self.layer_number == 1:
+        # if self.layer_number == 1:
         #    print(self.inference_current_sequence_len, self.inference_current_local_len,
         #          self.inference_current_global_len)
 
@@ -932,6 +960,8 @@ class CoreAttention(MegatronModule):
         use_long_attention=None,  # None / local / global / tglobal / global_to_global / global_sep?
         local_context=128,
         global_block_size=16,
+        global_tokens_at_start=128,
+        relative_distance_limit=4096,
     ):
 
         super(CoreAttention, self).__init__()
@@ -1015,6 +1045,9 @@ class CoreAttention(MegatronModule):
         self.local_context = local_context
         self.global_block_size = global_block_size
 
+        self.global_tokens_at_start = global_tokens_at_start
+        self.relative_distance_limit = relative_distance_limit
+
     def forward(
         self,
         query_layer,
@@ -1081,16 +1114,16 @@ class CoreAttention(MegatronModule):
         # ==================================================
         # Update query_layer, key_layer, value_layer
         # ==================================================
-        # TODO: figure out how to do this
-        # apply relative positional encoding (rotary embedding)
         if rotary_pos_emb is not None:
             q_pos_emb, k_pos_emb = rotary_pos_emb
-            query_layer = apply_rotary_pos_emb(query_layer, q_pos_emb)
-            key_layer = apply_rotary_pos_emb(key_layer, k_pos_emb)
-            # TODO, can apply positional embedding to value_layer so it has
-            # absolute positional embedding.
-            # otherwise, only relative positional embedding takes effect
-            # value_layer = apply_rotary_pos_emb(value_layer, k_pos_emb)
+
+            if use_long_attention is not None and global_pos_idx is not None:
+                total_global_tokens = global_pos_idx.shape[1]
+                query_layer[total_global_tokens:] = apply_rotary_pos_emb(query_layer[total_global_tokens:], q_pos_emb)
+                key_layer[total_global_tokens:] = apply_rotary_pos_emb(key_layer[total_global_tokens:], k_pos_emb)
+            else:
+                query_layer = apply_rotary_pos_emb(query_layer, q_pos_emb)
+                key_layer = apply_rotary_pos_emb(key_layer, k_pos_emb)
 
         if self.position_embedding_type.lower() == 'xpos':
             query_layer = self.xpos(query_layer, offset=key_layer.shape[-2] - query_layer.shape[-2], downscale=False)
@@ -1114,6 +1147,7 @@ class CoreAttention(MegatronModule):
                 value_layer,
                 attention_mask,
                 relative_position_bias,
+                rotary_pos_emb,
                 global_pos_idx,
                 global_attn_separate,
                 causal,
@@ -1127,7 +1161,7 @@ class CoreAttention(MegatronModule):
         # relative_position_bias [b, np, sq, sk]
         # context_layer [b, np, sq, hn]
         # ==================================================
-        #if self.layer_number == 1:
+        # if self.layer_number == 1:
         #    print('query_layer', query_layer.shape)
         #    print('key_layer', key_layer.shape)
         context_layer = self.attn_fn(query_layer, key_layer, value_layer, attention_mask, relative_position_bias)
@@ -1280,9 +1314,13 @@ class CoreAttention(MegatronModule):
 
         if attention_bias is not None:
             if HAVE_FLASH_ATTENTION_OCEAN:
-                return self.flash_attention_triton_ocean(query_layer, key_layer, value_layer, attention_mask, attention_bias,)
+                return self.flash_attention_triton_ocean(
+                    query_layer, key_layer, value_layer, attention_mask, attention_bias,
+                )
             else:
-                return self.flash_attention_triton(query_layer, key_layer, value_layer, attention_mask, attention_bias,)
+                return self.flash_attention_triton(
+                    query_layer, key_layer, value_layer, attention_mask, attention_bias,
+                )
         else:
             return self.flash_attention_cuda(query_layer, key_layer, value_layer, attention_mask,)
 
@@ -1356,8 +1394,8 @@ class CoreAttention(MegatronModule):
             else:
                 # [b, s] -> [b, 1, s, 1] / [b, 1, 1, s]
                 assert len(attention_mask.shape) == 2
-                attention_mask_q = (~attention_mask.unsqueeze(1).unsqueeze(3))
-                attention_mask_kv = (~attention_mask.unsqueeze(1).unsqueeze(2))
+                attention_mask_q = ~attention_mask.unsqueeze(1).unsqueeze(3)
+                attention_mask_kv = ~attention_mask.unsqueeze(1).unsqueeze(2)
 
             if attention_bias.shape[2] == attention_mask_q.shape[2]:
                 attention_bias = attention_bias.masked_fill(~attention_mask_q, torch.finfo(query_layer.dtype).min)
@@ -1365,7 +1403,7 @@ class CoreAttention(MegatronModule):
                 attention_bias = attention_bias.masked_fill(~attention_mask_kv, torch.finfo(query_layer.dtype).min)
 
         is_causal = self.attn_mask_type == AttnMaskType.causal and query_layer.shape[1] == key_layer.shape[1]
-        context_layer = flash_attn_func(query_layer, key_layer, value_layer, attention_bias, is_causal, )
+        context_layer = flash_attn_func(query_layer, key_layer, value_layer, attention_bias, is_causal,)
 
         # [b, sq, np, hn] -> [b, np, sq, hn]
         context_layer = context_layer.permute(0, 2, 1, 3)
@@ -1432,6 +1470,7 @@ class CoreAttention(MegatronModule):
         value_layer,
         attention_mask,
         relative_position_bias,
+        rotary_pos_emb,
         global_pos_idx,
         global_attn_separate,
         causal,
@@ -1443,17 +1482,17 @@ class CoreAttention(MegatronModule):
         if global_pos_idx is not None:
             if self.use_long_attention is not None:
 
-                total_transient_tokens = global_pos_idx.shape[1]
+                total_global_tokens = global_pos_idx.shape[1]
 
-                side_k = key_layer[:total_transient_tokens]
-                side_v = value_layer[:total_transient_tokens]
+                side_k = key_layer[:total_global_tokens]
+                side_v = value_layer[:total_global_tokens]
 
                 side_k = side_k.permute(1, 2, 0, 3)
                 side_v = side_v.permute(1, 2, 0, 3)
 
-                query_layer = query_layer[total_transient_tokens:]
-                key_layer = key_layer[total_transient_tokens:]
-                value_layer = value_layer[total_transient_tokens:]
+                query_layer = query_layer[total_global_tokens:]
+                key_layer = key_layer[total_global_tokens:]
+                value_layer = value_layer[total_global_tokens:]
             """else:
                 side_k = torch.gather(
                     key_layer.transpose(0, 1),
@@ -1481,11 +1520,6 @@ class CoreAttention(MegatronModule):
 
                 # [b, nh, sq/k, np]"""
 
-        if attention_mask is None:
-            attention_mask = torch.zeros(
-                query_layer.shape[1], query_layer.shape[0], device=torch.cuda.current_device()
-            ).to(dtype=torch.bool)
-
         # [sq/k, b, np, hn] -> [b, hn, sq/k, np]
         query_layer = query_layer.permute(1, 2, 0, 3)
         key_layer = key_layer.permute(1, 2, 0, 3)
@@ -1503,32 +1537,35 @@ class CoreAttention(MegatronModule):
         value_layer = _concatenate_n_blocks(value_layer, block_dim=2, sequence_dim=3, concat_num=3 - causal)
 
         if global_pos_idx is not None:
-            if self.use_long_attention == "global_limited":
-                # TODO: should have a separate parameter for number of limited global tokens
-                global_tokens_limit = self.local_context
+            # Tile side inputs across local key/value blocks
+            # New shape: (batch_size, n_heads, num_blocks, global_seq_len, dim_per_head)
+            reps = [1] * (side_k.ndim + 1)
+            reps[2] = key_layer.shape[2]
+            side_k = side_k.unsqueeze(2).repeat(reps)
+            side_v = side_v.unsqueeze(2).repeat(reps)
 
-                side_unfold = torch.nn.Unfold(
-                    kernel_size=(1, global_tokens_limit), stride=(1, self.local_context // self.global_block_size)
+            if rotary_pos_emb is not None:
+                _, k_pos_emb = rotary_pos_emb
+
+                rot_idx = torch.arange(
+                    -self.relative_distance_limit,
+                    -self.relative_distance_limit + self.local_context * key_layer.shape[2],
+                    self.local_context,
+                    device=k_pos_emb.device,
                 )
+                negative = rot_idx < 0
 
-                side_k_blocks = side_unfold(side_k.transpose(-2, -1)).transpose(-2, -1)
-                # side_k_blocks = side_unfold(F.pad(side_k, (0, 0, global_tokens_limit, 0)))
-                # side_v_blocks = side_unfold(F.pad(side_v, (0, 0, global_tokens_limit, 0)))
+                rots = k_pos_emb[rot_idx.abs().long()]
+                rots[negative] = -rots[negative]
 
-                key_layer = torch.cat([key_layer, side_k_blocks], dim=3)
-                value_layer = torch.cat([value_layer, side_v_blocks], dim=3)
-            elif not global_attn_separate:
-                # Tile side inputs across local key/value blocks
-                # New shape: (batch_size, n_heads, num_blocks, global_seq_len, dim_per_head)
-                reps = [1] * (side_k.ndim + 1)
-                reps[2] = key_layer.shape[2]
-                side_k = side_k.unsqueeze(2).repeat(reps)
-                side_v = side_v.unsqueeze(2).repeat(reps)
+                rots = rots.unsqueeze(0).unsqueeze(0).squeeze(3)
 
-                # Concatenate "local" and "side"/"global" key/value states
-                # New shape: (batch_size, n_heads, num_blocks, 3 * block_len + global_seq_len, dim_per_head)
-                key_layer = torch.cat([side_k, key_layer], dim=3)
-                value_layer = torch.cat([side_v, value_layer], dim=3)
+                side_k = apply_rotary_pos_emb(side_k, rots)
+
+            # Concatenate "local" and "side"/"global" key/value states
+            # New shape: (batch_size, n_heads, num_blocks, 3 * block_len + global_seq_len, dim_per_head)
+            key_layer = torch.cat([side_k, key_layer], dim=3)
+            value_layer = torch.cat([side_v, value_layer], dim=3)
 
         # ==================================================
         # Update attention_mask, attention_bias
@@ -1555,10 +1592,23 @@ class CoreAttention(MegatronModule):
 
             if relative_position_bias is None:
                 if not self.use_flash_attention:
-                    relative_position_bias = torch.where(attention_mask, 0.0, -1e10)
+                    _, _, attention_mask = build_rel_pos_long_attention(
+                        seq_length=sq0,
+                        use_long_attention=self.use_long_attention,
+                        local_context=self.local_context,
+                        global_tokens_at_start=self.global_tokens_at_start,
+                        relative_distance_limit=self.relative_distance_limit,
+                        global_block_size=self.global_block_size,
+                        global_tokens_cache=0,
+                        global_segment_pos_idx=False,
+                        causal=True,
+                        get_mask=True,
+                        vector_only=False,
+                    )
+                    relative_position_bias = torch.where(attention_mask, -1e10, 0).unsqueeze(0).unsqueeze(0)
             else:
                 relative_position_bias = relative_position_bias[..., :nb, :, :sk]
-                #relative_position_bias = relative_position_bias + torch.where(attention_mask, 0.0, -1e10)
+                # relative_position_bias = relative_position_bias + torch.where(attention_mask, 0.0, -1e10)
 
             """if causal and not global_attn_separate:
                 causal_mask = build_rel_pos_long_attention(

@@ -543,13 +543,23 @@ def build_rel_pos_long_attention(
     if vector_only:
         context_position = memory_position[local_context * 2 - 1].unsqueeze(0)
     else:
-        context_position = memory_position[local_context: local_context * 2]
+        context_position = memory_position[local_context : local_context * 2]
     relative_position = memory_position[None, :] - context_position[:, None]
     relative_position = relative_position[None, :].expand(num_blocks, -1, -1)
 
     global_tokens = 0
 
-    side_bias_idx, context_global_block_idx = get_global_token_idx(use_long_attention, global_block_size, global_tokens_at_start, seq_length, pad_len, device, causal, get_mask, global_segment_pos_idx)
+    side_bias_idx, context_global_block_idx = get_global_token_idx(
+        use_long_attention,
+        global_block_size,
+        global_tokens_at_start,
+        seq_length,
+        pad_len,
+        device,
+        causal,
+        get_mask,
+        global_segment_pos_idx,
+    )
 
     if side_bias_idx is not None:
 
@@ -570,14 +580,12 @@ def build_rel_pos_long_attention(
 
         global_tokens = relative_position_side.shape[-1]
 
-
-
     if get_mask:
         mask = relative_position > 0
-        mask[0, :, :global_tokens+local_context] = True
+        mask[0, :, : global_tokens + local_context] = True
 
         if not global_segment_pos_idx:
-            #relative_position[:, :, :global_tokens] -= local_context
+            # relative_position[:, :, :global_tokens] -= local_context
 
             global_too_close = relative_position[:, :, :global_tokens] >= -local_context
             mask[:, :, :global_tokens][global_too_close] = True
@@ -592,7 +600,18 @@ def build_rel_pos_long_attention(
 
     return relative_position, global_tokens
 
-def get_global_token_idx(use_long_attention, global_block_size, global_tokens_at_start, seq_length, pad_len, device, causal, get_mask, global_segment_pos_idx):
+
+def get_global_token_idx(
+    use_long_attention,
+    global_block_size,
+    global_tokens_at_start,
+    seq_length,
+    pad_len,
+    device,
+    causal,
+    get_mask,
+    global_segment_pos_idx,
+):
     side_bias_idx = None
     context_global_block_idx = None
     if use_long_attention == "tglobal":

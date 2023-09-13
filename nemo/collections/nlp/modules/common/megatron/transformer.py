@@ -178,6 +178,7 @@ class ParallelTransformerLayer_(MegatronModule, adapter_mixins.AdapterModuleMixi
         use_long_attn_decoding=True,
         global_tokens_at_start=128,
         global_tokens_cache=1024,
+        relative_distance_limit=4096,
     ):
         super(ParallelTransformerLayer_, self).__init__()
 
@@ -271,6 +272,7 @@ class ParallelTransformerLayer_(MegatronModule, adapter_mixins.AdapterModuleMixi
                 use_long_attn_decoding=use_long_attn_decoding,
                 global_tokens_at_start=global_tokens_at_start,
                 global_tokens_cache=global_tokens_cache,
+                relative_distance_limit=relative_distance_limit,
             )
 
             if transformer_block_type == 'normformer':
@@ -715,6 +717,7 @@ class ParallelTransformerLayer(ParallelTransformerLayer_):
         use_long_attn_decoding=True,
         global_tokens_at_start=128,
         global_tokens_cache=1024,
+        relative_distance_limit=4096,
     ):
         super(ParallelTransformerLayer, self).__init__(
             init_method=init_method,
@@ -764,6 +767,7 @@ class ParallelTransformerLayer(ParallelTransformerLayer_):
             use_long_attn_decoding=use_long_attn_decoding,
             global_tokens_at_start=global_tokens_at_start,
             global_tokens_cache=global_tokens_cache,
+            relative_distance_limit=relative_distance_limit,
         )
 
         # Dtype for forward pass - ignore amp O2
@@ -984,6 +988,7 @@ class ParallelTransformer(MegatronModule):
         use_long_attn_decoding=True,
         global_tokens_at_start=128,
         global_tokens_cache=1024,
+        relative_distance_limit=4096,
     ):
         super(ParallelTransformer, self).__init__()
 
@@ -1171,6 +1176,7 @@ class ParallelTransformer(MegatronModule):
                     use_long_attn_decoding=use_long_attn_decoding,
                     global_tokens_at_start=global_tokens_at_start,
                     global_tokens_cache=global_tokens_cache,
+                    relative_distance_limit=relative_distance_limit,
                 )
 
         if parallel_state.get_virtual_pipeline_model_parallel_world_size() is not None:

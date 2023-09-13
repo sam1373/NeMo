@@ -700,6 +700,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
             use_long_attn_decoding=use_long_attn_decoding,
             global_tokens_at_start=global_tokens_at_start,
             global_tokens_cache=global_tokens_cache,
+            relative_distance_limit=relative_distance_limit,
         )
         self._encoder_key = 'encoder'
 
@@ -815,7 +816,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
         use_long_attention = self.use_long_attention
         is_decoding = encoder_input.size(0) == 1
 
-        #if is_decoding and use_long_attention and not self.use_long_attn_decoding:
+        # if is_decoding and use_long_attention and not self.use_long_attn_decoding:
         #    use_long_attention = None
 
         # enc_attn_mask: [1, 1, s, s]
@@ -838,7 +839,16 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
         encoder_self_attention_relative_position_bias = None
 
         if self.position_embedding_type == 'rope':
-            rotary_pos_emb = self.rotary_pos_emb(enc_seq_length)
+            if use_long_attention is not None:
+                rotary_pos_emb = self.rotary_pos_emb(
+                    max(
+                        self.local_context + self.global_tokens_cache + 1,
+                        self.relative_distance_limit + 1,
+                        enc_seq_length,
+                    )
+                )
+            else:
+                rotary_pos_emb = self.rotary_pos_emb(enc_seq_length)
         elif (
             self.position_embedding_type == 'alibi'
             or self.position_embedding_type == 'sandwich'
@@ -878,7 +888,6 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
                         )
 
                     encoder_self_attention_relative_position_bias = encoder_self_attention_relative_position_bias
-
 
                 else:
                     if global_attn_separate:
