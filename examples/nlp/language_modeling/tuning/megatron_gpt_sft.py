@@ -99,6 +99,9 @@ def _modify_config(gpt_cfg, cfg, add_cfg_to_tree=False):
         if 'local_context' in cfg.model:
             gpt_cfg.local_context = cfg.model.local_context
 
+        if 'global_tokens_cache' in cfg.model:
+            gpt_cfg.global_tokens_cache = cfg.model.global_tokens_cache
+
         sft_cls = MegatronGPTSFTModel
         gpt_cfg.target = f"{sft_cls.__module__}.{sft_cls.__name__}"
 
