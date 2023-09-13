@@ -28,30 +28,30 @@ __all__ = ['GPTSFTDataset']
 
 class GPTSFTDataset(Dataset):
     def __init__(
-            self,
-            file_path: str,
-            tokenizer: TokenizerSpec,
-            max_seq_length: int = 1024,
-            min_seq_length: int = 1,
-            add_bos: bool = False,
-            add_eos: bool = True,
-            add_sep: bool = False,
-            sep_id: int = None,
-            max_num_samples: int = None,
-            seed: int = 1234,
-            context_key: str = "text",
-            label_key: str = "answer",
-            separate_prompt_and_response_with_newline: bool = False,
-            answer_only_loss: bool = True,
-            truncation_field: str = "text",
-            pad_to_max_length: bool = False,
-            # (@adithyare) allows for much faster training especially in PEFT settings.
-            index_mapping_dir: str = None,
-            prompt_template: str = None,
-            virtual_tokens: int = 0,
-            tokens_to_generate: int = 0,
-            memmap_workers: Optional[int] = None,
-            truncation_augmentation: bool = False,
+        self,
+        file_path: str,
+        tokenizer: TokenizerSpec,
+        max_seq_length: int = 1024,
+        min_seq_length: int = 1,
+        add_bos: bool = False,
+        add_eos: bool = True,
+        add_sep: bool = False,
+        sep_id: int = None,
+        max_num_samples: int = None,
+        seed: int = 1234,
+        context_key: str = "text",
+        label_key: str = "answer",
+        separate_prompt_and_response_with_newline: bool = False,
+        answer_only_loss: bool = True,
+        truncation_field: str = "text",
+        pad_to_max_length: bool = False,
+        # (@adithyare) allows for much faster training especially in PEFT settings.
+        index_mapping_dir: str = None,
+        prompt_template: str = None,
+        virtual_tokens: int = 0,
+        tokens_to_generate: int = 0,
+        memmap_workers: Optional[int] = None,
+        truncation_augmentation: bool = False,
     ):
         """
         file_path: Path to a JSONL GPT supervised fine-tuning dataset. Data is formatted as multiple JSON lines with each line formatted as follows. {'input': 'John von Neumann\nVon Neumann made fundamental contributions .... Q: What did the math of artificial viscosity do?', 'output': 'smoothed the shock transition without sacrificing basic physics'}
@@ -78,7 +78,8 @@ class GPTSFTDataset(Dataset):
         self.tokenizer = tokenizer
         # AutoTokenizer(pretrained_model_name='gpt2') tokenizer_space_sensitive = True
         self.tokenizer_space_sensitive = tokenizer.text_to_tokens('Hello World') != tokenizer.text_to_tokens(
-            'Hello') + tokenizer.text_to_tokens('World')
+            'Hello'
+        ) + tokenizer.text_to_tokens('World')
         self.file_path = file_path
         self.max_seq_length = max_seq_length
         self.min_seq_length = min_seq_length
@@ -104,8 +105,12 @@ class GPTSFTDataset(Dataset):
             self.prompt_template = self.prompt_template.encode('utf-8').decode('unicode_escape')
 
         # Previous models has self.truncation_field = ['context'] and self.context_key = ['input']
-        if len(self.truncation_field) == 1 and len(self.context_key) == 1 and self.context_key[0] == 'input' and \
-                self.truncation_field[0] == 'context':
+        if (
+            len(self.truncation_field) == 1
+            and len(self.context_key) == 1
+            and self.context_key[0] == 'input'
+            and self.truncation_field[0] == 'context'
+        ):
             self.truncation_field[0] = self.context_key[0]
         assert set(self.truncation_field).issubset(
             self.context_key
@@ -187,8 +192,11 @@ class GPTSFTDataset(Dataset):
             ), f'{{{self.label_key}}} must be at the end of prompt_template.'
 
             # positions
-            context_positions = [p for cph in context_phs for p in
-                                 (self.prompt_template.index(cph), self.prompt_template.index(cph) + len(cph))]
+            context_positions = [
+                p
+                for cph in context_phs
+                for p in (self.prompt_template.index(cph), self.prompt_template.index(cph) + len(cph))
+            ]
             context_positions = [0] + context_positions + [self.prompt_template.index(label_ph)]
             context_positions = sorted(context_positions)
 
@@ -197,8 +205,13 @@ class GPTSFTDataset(Dataset):
                 pi = context_positions[i]
                 pj = context_positions[i + 1]
                 # prev_s end space + curr_s start space
-                leading_space = 0 if i == 0 else int(self.prompt_template[pi - 1] == ' ') + len(
-                    self.prompt_template[pi:pj]) - len(self.prompt_template[pi:pj].lstrip(' '))
+                leading_space = (
+                    0
+                    if i == 0
+                    else int(self.prompt_template[pi - 1] == ' ')
+                    + len(self.prompt_template[pi:pj])
+                    - len(self.prompt_template[pi:pj].lstrip(' '))
+                )
                 cs = context_ph_to_context_s.get(self.prompt_template[pi:pj], self.prompt_template[pi:pj]).strip(' ')
                 if len(cs) > 0:
                     prompt_strings.append(' ' * leading_space + cs if self.tokenizer_space_sensitive else cs)
@@ -241,12 +254,12 @@ class GPTSFTDataset(Dataset):
         context_ids = prompt_ids[:-1]
         label_ids = prompt_ids[-1]
         total_ids = (
-                self.virtual_tokens
-                + sum(len(ids) for ids in context_ids)
-                + max(len(label_ids), self.tokens_to_generate)
-                + self.add_bos
-                + self.add_sep
-                + self.add_eos  # Only training need to consider eos token
+            self.virtual_tokens
+            + sum(len(ids) for ids in context_ids)
+            + max(len(label_ids), self.tokens_to_generate)
+            + self.add_bos
+            + self.add_sep
+            + self.add_eos  # Only training need to consider eos token
         )
 
         if total_ids > self.max_seq_length:
@@ -264,7 +277,7 @@ class GPTSFTDataset(Dataset):
                     assert len(ids) >= truncation_length, f'{key} is not long enough to truncate.'
                     ids_offset = random.randint(0, truncation_length) if self.truncation_augmentation else 0
                     ids_length = len(ids) - truncation_length
-                    context_ids[i] = ids[ids_offset:ids_offset + ids_length]
+                    context_ids[i] = ids[ids_offset : ids_offset + ids_length]
 
         context_ids = [i for ids in context_ids for i in ids]
         return context_ids, label_ids
@@ -356,6 +369,8 @@ class GPTSFTDataset(Dataset):
         """
         # seq_length = len(input_ids)
         # `attention_mask` has the shape of [1, seq_length, seq_length]
+        max_length = 4096
+        #TODO: make mask optional instead
         attention_mask = torch.tril(torch.ones((max_length, max_length))).unsqueeze(0)
         attention_mask = attention_mask < 0.5
         return attention_mask

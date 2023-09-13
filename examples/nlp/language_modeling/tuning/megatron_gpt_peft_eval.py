@@ -154,6 +154,12 @@ def main(cfg) -> None:
         if 'position_embedding_type' in cfg.model:
             peft_model_cfg.position_embedding_type = cfg.model.position_embedding_type
 
+        if 'global_block_size' in cfg.model:
+            peft_model_cfg.global_block_size = cfg.model.global_block_size
+
+        if 'local_context' in cfg.model:
+            peft_model_cfg.local_context = cfg.model.local_context
+
     with open_dict(cfg):
         # update the config with the trained model config
         # required for hydra interpolation to work inside cfg.inference
