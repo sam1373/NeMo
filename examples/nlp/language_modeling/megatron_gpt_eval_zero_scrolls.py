@@ -163,10 +163,10 @@ def main(cfg) -> None:
                     pretrained_cfg.use_flash_attention = cfg.inference.use_flash_attention
                 except:
                     pretrained_cfg["use_flash_attention"] = cfg.inference.use_flash_attention
-            
+
             if cfg.inference.get("apply_query_key_layer_scaling", None) is not None:
                 pretrained_cfg.apply_query_key_layer_scaling = cfg.inference.apply_query_key_layer_scaling
-            
+
             if cfg.get("model", None) is not None and cfg.model.get("encoder", None) is not None:
                 for k, v in cfg.model.encoder.items():
                     pretrained_cfg[k] = v
@@ -206,13 +206,13 @@ def main(cfg) -> None:
 
     print(f'\n{OmegaConf.to_yaml(model._cfg)}')
     model.freeze()
-  
+
     # Have to turn off activations_checkpoint_method for inference
     try:
         model.model.language_model.encoder.activations_checkpoint_method = None
     except AttributeError:
         pass
-    
+
     length_params: LengthParam = {
         "max_length": cfg.inference.task,
         "min_length": cfg.inference.min_tokens_to_generate,
@@ -238,13 +238,15 @@ def main(cfg) -> None:
             nb_paddings += 1
 
     print("Processing data...")
-    original_lines, truncated_input = process_data(model.tokenizer,
-                         prompt=None,
-                         task=cfg.inference.task,
-                         max_seq_length=cfg.inference.max_seq_length,
-                         data_dir=cfg.inference.data_dir,
-                         n_jobs=cfg.inference.n_jobs,
-                         remove_newline_tab=cfg.inference.remove_newline_tab)
+    original_lines, truncated_input = process_data(
+        model.tokenizer,
+        prompt=None,
+        task=cfg.inference.task,
+        max_seq_length=cfg.inference.max_seq_length,
+        data_dir=cfg.inference.data_dir,
+        n_jobs=cfg.inference.n_jobs,
+        remove_newline_tab=cfg.inference.remove_newline_tab,
+    )
 
     print("Running inference...")
     bs = cfg.inference.batch_size
@@ -273,6 +275,7 @@ def main(cfg) -> None:
         else:
             print(response)
     print("***************************")
+
 
 if __name__ == '__main__':
     main()  # noqa pylint: disable=no-value-for-parameter

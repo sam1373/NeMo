@@ -168,10 +168,14 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         self.local_context = local_context
         self.global_block_size = global_block_size
         self.global_tokens_at_start = global_tokens_at_start
+        if use_long_attention == "local":
+            self.global_tokens_at_start = 0
         self.global_tokens_cache = global_tokens_cache
         self.relative_distance_limit = relative_distance_limit
 
         self.use_long_attn_decoding = use_long_attn_decoding
+
+        self.update_global_during_decoding = True
 
         self.set_accepted_adapter_types(
             [
@@ -608,6 +612,31 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                         self.inference_key_memory[-seq_len:] = key_layer
                         self.inference_value_memory[-seq_len:] = value_layer
 
+                    self.inference_current_block_len += 1
+
+                    if (
+                        self.inference_current_block_len >= self.global_block_size
+                        and self.update_global_during_decoding
+                        and use_long_attention != "local"
+                    ):
+                        if self.inference_current_global_len < self.global_tokens_cache:
+                            self.inference_key_memory[self.inference_current_global_len] = key_layer[-1]
+                            self.inference_value_memory[self.inference_current_global_len] = value_layer[-1]
+                            self.inference_current_global_len += 1
+                        else:
+                            self.inference_key_memory[
+                                self.global_tokens_at_start : -self.local_context - 1
+                            ] = self.inference_key_memory[self.global_tokens_at_start + 1 : self.local_context].clone()
+                            self.inference_key_memory[-self.local_context - 1] = key_layer[-1]
+                            self.inference_value_memory[
+                                self.global_tokens_at_start : -self.local_context - 1
+                            ] = self.inference_value_memory[
+                                self.global_tokens_at_start + 1 : self.local_context
+                            ].clone()
+                            self.inference_value_memory[-self.local_context - 1] = value_layer[-1]
+
+                    self.inference_current_block_len %= self.global_block_size
+
                     last_local = -self.local_context + self.inference_current_local_len
                     if last_local == 0:
                         last_local = None
@@ -628,18 +657,39 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                     )
 
                     if relative_position_bias is not None:
-                        relative_position_bias = torch.cat(
-                            (
-                                relative_position_bias[
-                                    :,
-                                    :,
-                                    :,
-                                    -self.local_context - self.inference_current_global_len : -self.local_context,
-                                ],
-                                relative_position_bias[:, :, :, -self.inference_current_local_len :],
-                            ),
-                            dim=-1,
-                        )
+                        # TODO: issue if starting with less tokens that start globals...
+                        if self.global_tokens_at_start > 0:
+                            relative_position_bias_start = relative_position_bias[
+                                :, :, :, : self.global_tokens_at_start
+                            ]
+                            relative_position_bias = torch.cat(
+                                (
+                                    relative_position_bias_start,
+                                    relative_position_bias[
+                                        :,
+                                        :,
+                                        :,
+                                        -self.local_context
+                                        - self.inference_current_global_len
+                                        + self.global_tokens_at_start : -self.local_context,
+                                    ],
+                                    relative_position_bias[:, :, :, -self.inference_current_local_len :],
+                                ),
+                                dim=-1,
+                            )
+                        else:
+                            relative_position_bias = torch.cat(
+                                (
+                                    relative_position_bias[
+                                        :,
+                                        :,
+                                        :,
+                                        -self.local_context - self.inference_current_global_len : -self.local_context,
+                                    ],
+                                    relative_position_bias[:, :, :, -self.inference_current_local_len :],
+                                ),
+                                dim=-1,
+                            )
 
                     if rotary_pos_emb is not None:
                         q_pos_emb, k_pos_emb = rotary_pos_emb
@@ -688,6 +738,8 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                     self.inference_value_memory[-self.local_context : last_local] = value_layer[-local_tokens:]
 
                     self.inference_current_local_len = local_tokens
+
+                    self.inference_current_block_len = (key_layer.shape[0] - global_tokens) % self.global_block_size
             else:
 
                 if use_long_attention is not None and use_long_attention != "local":

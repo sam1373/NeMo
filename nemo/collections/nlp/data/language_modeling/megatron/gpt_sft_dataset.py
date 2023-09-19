@@ -370,7 +370,7 @@ class GPTSFTDataset(Dataset):
         # seq_length = len(input_ids)
         # `attention_mask` has the shape of [1, seq_length, seq_length]
         max_length = 4096
-        #TODO: make mask optional instead
+        # TODO: make mask optional instead
         attention_mask = torch.tril(torch.ones((max_length, max_length))).unsqueeze(0)
         attention_mask = attention_mask < 0.5
         return attention_mask

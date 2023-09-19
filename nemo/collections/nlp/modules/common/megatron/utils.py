@@ -526,13 +526,25 @@ def build_rel_pos_long_attention(
     if decoding:
 
         relative_position_local = torch.arange(-local_context + 1, 1).to(torch.cuda.current_device())
-        relative_position_global = torch.arange(-global_tokens_cache + 1, 0).to(torch.cuda.current_device())
+        relative_position_global = torch.arange(-global_tokens_cache + global_tokens_at_start + 1, 0).to(
+            torch.cuda.current_device()
+        )
+
+        global_start = (
+            torch.Tensor([-relative_distance_limit])
+            .to(torch.cuda.current_device())
+            .repeat(global_tokens_at_start)
+            .long()
+        )
 
         if not global_segment_pos_idx:
             relative_position_global *= global_block_size
             relative_position_global -= local_context
 
-        return torch.cat((relative_position_global, relative_position_local))[None, None, :], global_tokens_cache
+        relative_position = torch.cat((global_start, relative_position_global, relative_position_local))
+        relative_position[relative_position < -relative_distance_limit] = -relative_distance_limit
+
+        return relative_position[None, None, :], global_tokens_cache
 
     device = torch.cuda.current_device()
 
