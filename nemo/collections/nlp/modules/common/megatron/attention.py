@@ -619,6 +619,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                         self.inference_current_block_len >= self.global_block_size
                         and self.update_global_during_decoding
                         and use_long_attention != "local"
+                        and use_long_attention != "global_start_only"
                     ):
                         if self.inference_current_global_len < self.global_tokens_cache:
                             self.inference_key_memory[self.inference_current_global_len] = key_layer[-1]
