@@ -283,7 +283,7 @@ class LimitedContextGPTModelTextGenerationStrategy(GPTModelTextGenerationStrateg
         # if compute_attention_mask:
         #    attention_mask_repeat = torch.concat([self.attention_mask for _ in range(micro_batch_size)])
 
-        past_len = self.model.cfg.local_context + self.model.cfg.global_tokens_cache
+        past_len = self.model.cfg.get("local_context", 128) + self.model.cfg.get("global_tokens_cache", 1024)
 
         setkey_value_array = torch.tensor(
             [set_inference_key_value_memory] * micro_batch_size, device=torch.cuda.current_device()
