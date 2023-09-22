@@ -42,7 +42,7 @@ from nemo.collections.nlp.modules.common.megatron.utils import (
     _mask_local_attention_mask,
     _get_local_attention_mask,
     build_rel_pos_long_attention,
-    get_global_token_idx
+    get_global_token_idx,
 )
 
 from nemo.collections.nlp.parts import utils_funcs
@@ -705,7 +705,24 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                                 - self.inference_current_local_len
                                 + 1
                             ]
-                            k_start = k_start.repeat(self.inference_current_global_len, 1, 1, 1)
+                            k_start = k_start.repeat(self.global_tokens_at_start, 1, 1, 1)
+
+                            if use_long_attention == "global":
+
+                                non_start_globals = self.inference_current_global_len - self.global_tokens_at_start
+
+                                pos_idx = torch.arange(
+                                    non_start_globals * self.global_block_size,
+                                    0,
+                                    -self.global_block_size,
+                                    device=hidden_states.device,
+                                )
+
+                                pos_idx[pos_idx > self.relative_distance_limit] = self.relative_distance_limit
+
+                                k_global = -k_pos_emb[pos_idx]
+
+                                k_start = torch.cat((k_start, k_global), dim=0)
 
                             k_pos_emb_new = torch.cat((k_start, k_pos_emb_new), dim=0)
 
@@ -1174,6 +1191,22 @@ class CoreAttention(MegatronModule):
                 total_global_tokens = global_pos_idx.shape[1]
                 query_layer[total_global_tokens:] = apply_rotary_pos_emb(query_layer[total_global_tokens:], q_pos_emb)
                 key_layer[total_global_tokens:] = apply_rotary_pos_emb(key_layer[total_global_tokens:], k_pos_emb)
+
+                if use_long_attention == "global":
+                    non_start_globals = total_global_tokens - self.global_tokens_at_start
+
+                    k_pos_global = torch.arange(
+                        self.global_tokens_at_start,
+                        self.global_tokens_at_start + non_start_globals * self.global_block_size,
+                        self.global_block_size,
+                        device=key_layer.device,
+                    )
+                    k_pos_global_emb = k_pos_emb[k_pos_global]
+
+                    key_layer[self.global_tokens_at_start : total_global_tokens] = apply_rotary_pos_emb(
+                        key_layer[self.global_tokens_at_start : total_global_tokens], k_pos_global_emb
+                    )
+
             else:
                 query_layer = apply_rotary_pos_emb(query_layer, q_pos_emb)
                 key_layer = apply_rotary_pos_emb(key_layer, k_pos_emb)
@@ -1610,10 +1643,11 @@ class CoreAttention(MegatronModule):
 
                 rots = k_pos_emb[rot_idx.abs().long()].unsqueeze(0).unsqueeze(0).squeeze(3)
                 rots = rots.repeat(1, 1, 1, self.global_tokens_at_start, 1)
-                rots[0, 0, negative, :, :] = k_pos_emb[:self.global_tokens_at_start].squeeze()
+                rots[0, 0, negative, :, :] = k_pos_emb[: self.global_tokens_at_start].squeeze()
 
-
-                side_k = apply_rotary_pos_emb(side_k, rots)
+                side_k[:, :, :, : self.global_tokens_at_start] = apply_rotary_pos_emb(
+                    side_k[:, :, :, : self.global_tokens_at_start], rots
+                )
 
             # Concatenate "local" and "side"/"global" key/value states
             # New shape: (batch_size, n_heads, num_blocks, 3 * block_len + global_seq_len, dim_per_head)
