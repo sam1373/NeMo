@@ -1527,7 +1527,7 @@ class CoreAttention(MegatronModule):
                 attention_bias = attention_bias.squeeze()
                 assert len(attention_bias.size()) == 1, 'Alibi bias should only contain head scales.'
         else:
-            bias_type = 'matrix'
+            bias_type = 'vector'
             assert len(attention_bias.size()) == 4
 
         context_layer = flash_attention(
@@ -1663,40 +1663,25 @@ class CoreAttention(MegatronModule):
         bs, np, nb, sk = key_layer.shape[:4]
         sq = query_layer.shape[3]
 
-        if not (causal and self.use_flash_attention):
 
-            """local_attention_mask = _get_local_attention_mask(
-                ~attention_mask.squeeze(1), self.local_context, causal, attention_mask.device
-            ).expand(-1, np, -1, -1, -1)
-
-            # Default attend to all tokens including global tokens
-            if not global_attn_separate:
-                attention_mask = torch.ones(
-                    bs, np, nb, sq, sk, dtype=local_attention_mask.dtype, device=torch.cuda.current_device(),
-                )
-                attention_mask[..., -local_attention_mask.shape[-1] :] = local_attention_mask
-            else:
-                attention_mask = local_attention_mask"""
-
-            if relative_position_bias is None:
-                if not self.use_flash_attention:
-                    _, _, attention_mask = build_rel_pos_long_attention(
-                        seq_length=sq0,
-                        use_long_attention=self.use_long_attention,
-                        local_context=self.local_context,
-                        global_tokens_at_start=self.global_tokens_at_start,
-                        relative_distance_limit=self.relative_distance_limit,
-                        global_block_size=self.global_block_size,
-                        global_tokens_cache=0,
-                        global_segment_pos_idx=False,
-                        causal=True,
-                        get_mask=True,
-                        vector_only=False,
-                    )
-                    relative_position_bias = torch.where(attention_mask, -1e10, 0).unsqueeze(0).unsqueeze(0)
-            else:
-                relative_position_bias = relative_position_bias[..., :nb, :, :sk]
-                # relative_position_bias = relative_position_bias + torch.where(attention_mask, 0.0, -1e10)
+        if relative_position_bias is None:
+            _, _, attention_mask = build_rel_pos_long_attention(
+                seq_length=sq0,
+                use_long_attention=self.use_long_attention,
+                local_context=self.local_context,
+                global_tokens_at_start=self.global_tokens_at_start,
+                relative_distance_limit=self.relative_distance_limit,
+                global_block_size=self.global_block_size,
+                global_tokens_cache=0,
+                global_segment_pos_idx=False,
+                causal=causal,
+                get_mask=True,
+                vector_only=self.use_flash_attention,
+            )
+            relative_position_bias = torch.where(attention_mask, -1e10, 0).unsqueeze(0).unsqueeze(0)
+        else:
+            relative_position_bias = relative_position_bias[..., :nb, :, :sk]
+            # relative_position_bias = relative_position_bias + torch.where(attention_mask, 0.0, -1e10)
 
             """if causal and not global_attn_separate:
                 causal_mask = build_rel_pos_long_attention(
