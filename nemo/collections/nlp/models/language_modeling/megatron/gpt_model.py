@@ -114,7 +114,7 @@ class GPTModel(MegatronModule):
         num_layers,
         num_attention_heads,
         ffn_hidden_size,
-        apply_query_key_layer_scaling=True,
+        apply_query_key_layer_scaling=False,
         kv_channels=None,
         num_tokentypes=0,
         parallel_output=True,
@@ -164,7 +164,9 @@ class GPTModel(MegatronModule):
         fp8_amax_compute_algo='most_recent',
         reduce_amax=True,
         use_emha=False,
+        ub_tp_comm_overlap=False,
         use_flash_attention=False,
+        seq_len_interpolation_factor=None,
         use_long_attention=None,
         local_context=128,
         global_block_size=16,
@@ -255,7 +257,9 @@ class GPTModel(MegatronModule):
             fp8_amax_compute_algo=fp8_amax_compute_algo,
             reduce_amax=reduce_amax,
             use_emha=use_emha,
+            ub_tp_comm_overlap=ub_tp_comm_overlap,
             use_flash_attention=use_flash_attention,
+            seq_len_interpolation_factor=seq_len_interpolation_factor,
             use_long_attention=use_long_attention,
             local_context=local_context,
             global_block_size=global_block_size,
@@ -282,6 +286,7 @@ class GPTModel(MegatronModule):
         input_ids,
         position_ids,
         attention_mask,
+        loss_mask=None,
         labels=None,
         token_type_ids=None,
         layer_past=None,
@@ -309,9 +314,15 @@ class GPTModel(MegatronModule):
         )
 
         if self.post_process:
-            return post_language_model_processing(
-                lm_output,
-                labels,
+            if loss_mask is not None:
+                loss_lm_output = lm_output.transpose(0, 1)[loss_mask == 1].unsqueeze(1)
+                loss_labels = labels[loss_mask == 1].unsqueeze(0)
+            else:
+                loss_lm_output = lm_output
+                loss_labels = labels
+            post_process_result = post_language_model_processing(
+                loss_lm_output,
+                loss_labels,
                 self.language_model.output_layer.weight
                 if not self.share_embeddings_and_output_weights
                 else self.word_embeddings_weight(),
@@ -323,6 +334,17 @@ class GPTModel(MegatronModule):
                 sequence_parallel=self.sequence_parallel,
                 gradient_accumulation_fusion=self.gradient_accumulation_fusion,
             )
+            if loss_mask is not None:
+                if isinstance(post_process_result, tuple):
+                    loss, logits = post_process_result
+                else:
+                    loss, logits = post_process_result, None
+
+                res = torch.zeros_like(labels).type_as(loss)
+                res[loss_mask == 1] = loss
+                return res if logits is None else (res, logits)
+            else:
+                return post_process_result
         else:
             return lm_output
 

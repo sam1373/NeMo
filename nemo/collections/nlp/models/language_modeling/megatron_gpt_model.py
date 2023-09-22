@@ -22,7 +22,6 @@ import numpy as np
 import torch
 from omegaconf.dictconfig import DictConfig
 from pytorch_lightning.accelerators import CPUAccelerator
-from pytorch_lightning.plugins.precision.native_amp import NativeMixedPrecisionPlugin
 from pytorch_lightning.trainer.trainer import Trainer
 
 from nemo.collections.nlp.data.language_modeling.megatron.data_samplers import (
@@ -53,7 +52,6 @@ from nemo.collections.nlp.modules.common.transformer.text_generation import (
     SamplingParam,
     TextGeneration,
 )
-from nemo.collections.nlp.parts.nlp_overrides import GradScaler
 from nemo.collections.nlp.parts.utils_funcs import get_last_rank
 from nemo.core.classes import Exportable
 from nemo.core.classes.common import PretrainedModelInfo
@@ -85,6 +83,7 @@ except (ImportError, ModuleNotFoundError):
 
 try:
     import transformer_engine
+    from transformer_engine.pytorch import module as te_module
 
     HAVE_TE = True
 
@@ -250,10 +249,20 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
             if isinstance(self.model, list):
                 converted_model = []
                 for module in self.model:
-                    converted_model.append(Float16Module(module=module, precision=cfg.precision))
+                    converted_model.append(
+                        Float16Module(
+                            module=module,
+                            precision=cfg.precision,
+                            share_token_embeddings=self.cfg.get('share_embeddings_and_output_weights', True),
+                        )
+                    )
                 self.model = converted_model
             else:
-                self.model = Float16Module(module=self.model, precision=cfg.precision)
+                self.model = Float16Module(
+                    module=self.model,
+                    precision=cfg.precision,
+                    share_token_embeddings=self.cfg.get('share_embeddings_and_output_weights', True),
+                )
 
         if self.trainer.precision == 'bf16':
             self.autocast_dtype = torch.bfloat16
@@ -282,6 +291,7 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
             self._nsys_profile_end_step *= grad_accum_steps
 
         self.get_attention_mask_from_fusion = self.cfg.get('get_attention_mask_from_fusion', True)
+        self.initialize_ub = self.cfg.get('ub_tp_comm_overlap', False)
 
     def get_gpt_module_list(self):
         if isinstance(self.model, list):
@@ -305,7 +315,7 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
             max_position_embeddings=self.cfg.max_position_embeddings,
             num_layers=self.cfg.num_layers,
             num_attention_heads=self.cfg.num_attention_heads,
-            apply_query_key_layer_scaling=self.cfg.get('apply_query_key_layer_scaling', False),
+            apply_query_key_layer_scaling=self.cfg.get('apply_query_key_layer_scaling', True),
             kv_channels=self.cfg.get('kv_channels', None),
             ffn_hidden_size=self.cfg.ffn_hidden_size,
             num_tokentypes=0,
@@ -357,8 +367,10 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
             fp8_amax_compute_algo=self.cfg.get('fp8_amax_compute_algo', 'most_recent'),
             reduce_amax=self.cfg.get('reduce_amax', True),
             use_emha=self.cfg.get('use_emha', False),
+            ub_tp_comm_overlap=self.cfg.get('ub_tp_comm_overlap', False),
             use_flash_attention=self.cfg.get('use_flash_attention', False),
             megatron_legacy=self.cfg.get('megatron_legacy', False),
+            seq_len_interpolation_factor=self.cfg.get('seq_len_interpolation_factor', None),
             use_long_attention=self.cfg.get('use_long_attention', None),
             local_context=self.cfg.get('local_context', 128),
             global_block_size=self.cfg.get('global_block_size', 16),
@@ -483,8 +495,8 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
             no_sync_func=no_sync_func,
             grad_sync_func=grad_sync_func,
             param_sync_func=param_sync_func,
-            # overlap_p2p_comm=self.cfg.get('overlap_p2p_comm', False),
-            # batch_p2p_comm=self.cfg.get('batch_p2p_comm', True),
+            overlap_p2p_comm=self.cfg.get('overlap_p2p_comm', False),
+            batch_p2p_comm=self.cfg.get('batch_p2p_comm', True),
         )
 
         # only the last stages of the pipeline return losses
@@ -516,16 +528,42 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
 
         return loss_mean
 
+    def initialize_ub_func(self):
+        input_shape = [
+            self.cfg.get('encoder_seq_length') * self.cfg.get('micro_batch_size'),
+            self.cfg.get('hidden_size'),
+        ]
+        ub_cfg_file_name = self.cfg.get('ub_tp_comm_overlap_cfg', None)
+        ub_cfgs = None
+        if ub_cfg_file_name is not None:
+            try:
+                import yaml
+
+                with open(ub_cfg_file_name, 'r') as ub_cfg_file:
+                    ub_cfgs = yaml.safe_load(ub_cfg_file)
+            except (ImportError, TypeError):
+                logging.error(f"Fail to read ub_tp_comm_overlap config file: {ub_cfg_file_name}.")
+        te_module.initialize_ub(
+            shape=input_shape,
+            tp_size=self.cfg.get('tensor_model_parallel_size'),
+            use_fp8=self.cfg.get('fp8'),
+            ub_cfgs=ub_cfgs,
+        )
+        self.initialize_ub = False
+
     def training_step(self, dataloader_iter, batch_idx):
         """
             We pass the dataloader iterator function to the micro-batch scheduler.
             The input batch to each micro-batch is fetched using the dataloader function
             in the micro-batch fwd function.
         """
+        # Initialize userbuffer communicators.
+        if self.initialize_ub:
+            self.initialize_ub_func()
+
         if self.rampup_batch_size:
             num_microbatch_calculator = apex.transformer.pipeline_parallel.utils._GLOBAL_NUM_MICROBATCHES_CALCULATOR
             current_global_batch_size = num_microbatch_calculator.current_global_batch_size
-            logging.info(current_global_batch_size)
             # do validation and save the checkpoint when gbs is changed
             if self.prev_global_batch_size != current_global_batch_size and self.prev_global_batch_size:
                 self.trainer.should_stop = True
@@ -771,14 +809,15 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
                     required_keys.update(('tokens', 'position_ids'))
                 if parallel_state.is_pipeline_last_stage():
                     required_keys.update(('labels', 'loss_mask'))
-            if self.get_attention_mask_from_fusion:
+            if self.get_attention_mask_from_fusion and 'attention_mask' in required_keys:
                 required_keys.remove('attention_mask')
             batch = {key: val.cuda(non_blocking=True) if key in required_keys else None for key, val in batch.items()}
             # Model forward pass
             output_tensor = model(
                 batch['tokens'],
                 batch['position_ids'],
-                batch['attention_mask'],
+                batch.get('attention_mask', None),
+                batch['loss_mask'],
                 batch['labels'],
                 checkpoint_activations_all_layers=checkpoint_activations_all_layers,
             )
@@ -852,6 +891,10 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
             from the dataloader to produce a list of microbatches.
             The list of microbatches is then piped through the pipeline using megatron-core fwd/bwd functions.
         """
+        # Initialize userbuffer communicators.
+        if self.initialize_ub:
+            self.initialize_ub_func()
+
         if isinstance(self.model, list):
             for model_module in self.model:
                 model_module.eval()
@@ -865,9 +908,6 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
         return loss
 
     def validation_epoch_end(self, outputs):
-        if len(outputs) == 0:
-            return
-
         if parallel_state.is_pipeline_last_stage():
             # only the last pipeline parallel stages return loss with their batch size
             if self.cfg.data.get('validation_drop_last', True):
@@ -960,7 +1000,7 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
                     data_parallel_size=parallel_state.get_data_parallel_world_size(),
                     drop_last=drop_last,
                     global_batch_size=self.cfg.global_batch_size,
-                    rampup_batch_size=self.cfg.rampup_batch_size,
+                    rampup_batch_size=self.cfg.get('rampup_batch_size', None),
                     pad_samples_to_global_batch_size=pad_samples_to_global_batch_size,
                 )
             elif self.cfg.data.dataloader_type == 'cyclic':
@@ -1012,6 +1052,11 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
         self.init_global_step = self.trainer.global_step
 
         if self.rampup_batch_size:
+            optimizer = self.cfg.optim.get('name', None)
+            assert (
+                optimizer == 'fused_adam'
+            ), f'{optimizer} optimizer is not supported yet with rampup batch size. Please, use fused_adam optimizer instead.'
+
             num_microbatch_calculator = apex.transformer.pipeline_parallel.utils._GLOBAL_NUM_MICROBATCHES_CALCULATOR
             num_microbatch_calculator.update(self.init_consumed_samples, consistency_check=False)
             self.prev_consumed_samples = self.init_consumed_samples
@@ -1026,17 +1071,18 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
             self.setup_validation_data(self.cfg.data)
             self.setup_test_data(self.cfg.data)
 
-        # when using pipeline model parallel the final stage need to initialize word embeddings
-        if parallel_state.get_pipeline_model_parallel_world_size() > 1:
-            if isinstance(self.model, list):
-                for i, module in enumerate(self.model):
-                    parallel_state.set_virtual_pipeline_model_parallel_rank(i)
+        if stage == 'fit':
+            # when using pipeline model parallel the final stage need to initialize word embeddings
+            if parallel_state.get_pipeline_model_parallel_world_size() > 1:
+                if isinstance(self.model, list):
+                    for i, module in enumerate(self.model):
+                        parallel_state.set_virtual_pipeline_model_parallel_rank(i)
+                        if self.cfg.get('share_embeddings_and_output_weights', True):
+                            module.sync_initial_word_embeddings()
+                    parallel_state.set_virtual_pipeline_model_parallel_rank(0)
+                else:
                     if self.cfg.get('share_embeddings_and_output_weights', True):
-                        module.sync_initial_word_embeddings()
-                parallel_state.set_virtual_pipeline_model_parallel_rank(0)
-            else:
-                if self.cfg.get('share_embeddings_and_output_weights', True):
-                    self.model.sync_initial_word_embeddings()
+                        self.model.sync_initial_word_embeddings()
 
         if self.cfg.get('transformer_engine', False):
             self.setup_transformer_engine_tp_groups()
@@ -1106,7 +1152,6 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
         # default do greedy sampling
         if length_params is None:
             length_params = get_default_length_params()
-
         return megatron_gpt_generate(self.cuda(), inputs, self.tokenizer, length_params, sampling_params)
 
     def predict_step(self, batch: Any, batch_idx: int, dataloader_idx: Optional[int] = None) -> Any:

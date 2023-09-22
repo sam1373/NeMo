@@ -73,7 +73,7 @@ def get_language_model(
     vocab_size,
     num_attention_heads,
     encoder_attn_mask_type,
-    apply_query_key_layer_scaling=True,
+    apply_query_key_layer_scaling=False,
     kv_channels=None,
     init_method=None,
     scaled_init_method=None,
@@ -124,7 +124,9 @@ def get_language_model(
     fp8_amax_compute_algo='most_recent',
     reduce_amax=True,
     use_emha=False,
+    ub_tp_comm_overlap=False,
     use_flash_attention=False,
+    seq_len_interpolation_factor=None,
     use_long_attention=None,
     local_context=128,
     global_block_size=16,
@@ -207,7 +209,9 @@ def get_language_model(
         fp8_amax_compute_algo=fp8_amax_compute_algo,
         reduce_amax=reduce_amax,
         use_emha=use_emha,
+        ub_tp_comm_overlap=ub_tp_comm_overlap,
         use_flash_attention=use_flash_attention,
+        seq_len_interpolation_factor=seq_len_interpolation_factor,
         use_long_attention=use_long_attention,
         local_context=local_context,
         global_block_size=global_block_size,
@@ -521,7 +525,9 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
         fp8_amax_compute_algo='most_recent',
         reduce_amax=True,
         use_emha=False,
+        ub_tp_comm_overlap=False,
         use_flash_attention=False,
+        seq_len_interpolation_factor=None,
         use_long_attention=None,
         local_context=128,
         global_block_size=16,
@@ -558,7 +564,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
         self.global_tokens_at_start = global_tokens_at_start
         self.global_tokens_cache = global_tokens_cache
         self.relative_distance_limit = relative_distance_limit
-        embedding_init_method_std = 0.02
+
         if kv_channels is None:
 
             assert (
@@ -630,7 +636,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
                 num_attention_heads_kerple=None,
                 max_seq_len=max_position_embeddings,
             )
-            assert use_flash_attention == False  # flash-attention not supported with kerple at this point
+            # assert use_flash_attention == False  # flash-attention not supported with kerple at this point
 
         elif position_embedding_type == 'sandwich':
             self.encoder_relative_position_embedding = SandwichRelativePositionEmbedding(
@@ -692,6 +698,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
             fp8_amax_compute_algo=fp8_amax_compute_algo,
             reduce_amax=reduce_amax,
             use_emha=use_emha,
+            ub_tp_comm_overlap=ub_tp_comm_overlap,
             position_embedding_type=position_embedding_type,
             use_flash_attention=use_flash_attention,
             use_long_attention=use_long_attention,
@@ -802,10 +809,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
                 ptuning_adapter = self.get_adapter_module(AdapterName.PTUNING_ADAPTER)
                 v = ptuning_adapter.virtual_tokens
                 if ptuning_adapter and _sq >= v:  # The sequence should be longer the v to insert virtual embeddings.
-                    strategy = ptuning_adapter.adapter_strategy
-                    virtual_embeddings = self.forward_single_enabled_adapter_(
-                        _bs, ptuning_adapter, adapter_name=AdapterName.PTUNING_ADAPTER, adapter_strategy=strategy,
-                    )
+                    virtual_embeddings = ptuning_adapter(_bs)
                     encoder_input = encoder_input[
                         v:, :, :
                     ]  # the first v tokens are pads so that they can be swapped out with virtual embeddings.
@@ -815,9 +819,6 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
 
         use_long_attention = self.use_long_attention
         is_decoding = encoder_input.size(0) == 1
-
-        # if is_decoding and use_long_attention and not self.use_long_attn_decoding:
-        #    use_long_attention = None
 
         # enc_attn_mask: [1, 1, s, s]
         if inference_max_sequence_len is not None and use_long_attention is None:
@@ -837,17 +838,14 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
 
         rotary_pos_emb = None
         encoder_self_attention_relative_position_bias = None
-
         if self.position_embedding_type == 'rope':
             if use_long_attention is not None:
-                rotary_pos_emb = self.rotary_pos_emb(
-                    max(
-                        self.local_context + self.global_tokens_cache + 1,
-                        self.relative_distance_limit + 1,
-                        inference_max_sequence_len,
-                        enc_seq_length,
-                    )
+                need_rot = max(
+                    self.local_context + self.global_tokens_cache + 1, self.relative_distance_limit + 1, enc_seq_length
                 )
+                if inference_max_sequence_len is not None:
+                    need_rot = max(need_rot, inference_max_sequence_len)
+                rotary_pos_emb = self.rotary_pos_emb(need_rot)
             else:
                 rotary_pos_emb = self.rotary_pos_emb(enc_seq_length)
         elif (
