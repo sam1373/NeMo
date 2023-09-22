@@ -42,6 +42,7 @@ from nemo.collections.nlp.modules.common.megatron.utils import (
     _mask_local_attention_mask,
     _get_local_attention_mask,
     build_rel_pos_long_attention,
+    get_global_token_idx
 )
 
 from nemo.collections.nlp.parts import utils_funcs
@@ -1607,10 +1608,10 @@ class CoreAttention(MegatronModule):
                 )
                 negative = rot_idx < 0
 
-                rots = k_pos_emb[rot_idx.abs().long()]
-                rots[negative] = -rots[negative]
+                rots = k_pos_emb[rot_idx.abs().long()].unsqueeze(0).unsqueeze(0).squeeze(3)
+                rots = rots.repeat(1, 1, 1, self.global_tokens_at_start, 1)
+                rots[0, 0, negative, :, :] = k_pos_emb[:self.global_tokens_at_start].squeeze()
 
-                rots = rots.unsqueeze(0).unsqueeze(0).squeeze(3)
 
                 side_k = apply_rotary_pos_emb(side_k, rots)
 

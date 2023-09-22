@@ -845,6 +845,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
                         self.local_context + self.global_tokens_cache + 1,
                         self.relative_distance_limit + 1,
                         inference_max_sequence_len,
+                        enc_seq_length,
                     )
                 )
             else:
