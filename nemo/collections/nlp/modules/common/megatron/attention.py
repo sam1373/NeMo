@@ -1119,6 +1119,8 @@ class CoreAttention(MegatronModule):
         self.global_tokens_at_start = global_tokens_at_start
         self.relative_distance_limit = relative_distance_limit
 
+        self.local_context_shift = self.position_embedding_type == "rope"
+
     def forward(
         self,
         query_layer,
@@ -1196,6 +1198,7 @@ class CoreAttention(MegatronModule):
                 if use_long_attention == "global":
                     non_start_globals = total_global_tokens - self.global_tokens_at_start
 
+                    # TODO: this is not correct, need to respect distance limit
                     k_pos_global = torch.arange(
                         self.global_tokens_at_start,
                         self.global_tokens_at_start + non_start_globals * self.global_block_size,
@@ -1315,6 +1318,12 @@ class CoreAttention(MegatronModule):
 
         if headscale_tensor is not None:
             context_layer = context_layer * headscale_tensor
+
+        if self.use_long_attention is not None and self.local_context_shift:
+            # shift back
+            context_layer[:, self.num_attention_heads_per_partition // 2 :] = context_layer[
+                :, self.num_attention_heads_per_partition // 2 :
+            ].roll(self.local_context // 2, dims=2)
 
         # [b, np, sq, hn] --> [sq, b, np, hn]
         context_layer = context_layer.permute(2, 0, 1, 3).contiguous()
@@ -1580,32 +1589,17 @@ class CoreAttention(MegatronModule):
                 query_layer = query_layer[total_global_tokens:]
                 key_layer = key_layer[total_global_tokens:]
                 value_layer = value_layer[total_global_tokens:]
-            """else:
-                side_k = torch.gather(
-                    key_layer.transpose(0, 1),
-                    dim=1,
-                    index=global_pos_idx[..., None, None].expand(-1, -1, key_layer.shape[-2], key_layer.shape[-1]),
-                )
-                side_v = torch.gather(
-                    value_layer.transpose(0, 1),
-                    dim=1,
-                    index=global_pos_idx[..., None, None].expand(-1, -1, value_layer.shape[-2], value_layer.shape[-1]),
-                )
 
-                side_k = side_k.transpose(1, 2).to(dtype=key_layer.dtype)
-                side_v = side_v.transpose(1, 2)
-
-                if global_attn_separate:
-                    side_q = torch.gather(
-                        query_layer.transpose(0, 1),
-                        dim=1,
-                        index=global_pos_idx[..., None, None].expand(
-                            -1, -1, value_layer.shape[-2], value_layer.shape[-1]
-                        ),
-                    )
-                    side_q = side_q.transpose(1, 2)
-
-                # [b, nh, sq/k, np]"""
+        if self.local_context_shift:
+            query_layer[:, :, self.num_attention_heads_per_partition // 2 :] = query_layer[
+                :, :, self.num_attention_heads_per_partition // 2 :
+            ].roll(-self.local_context // 2, dims=0)
+            key_layer[:, :, self.num_attention_heads_per_partition // 2 :] = key_layer[
+                :, :, self.num_attention_heads_per_partition // 2 :
+            ].roll(-self.local_context // 2, dims=0)
+            value_layer[:, :, self.num_attention_heads_per_partition // 2 :] = value_layer[
+                :, :, self.num_attention_heads_per_partition // 2 :
+            ].roll(-self.local_context // 2, dims=0)
 
         # [sq/k, b, np, hn] -> [b, hn, sq/k, np]
         query_layer = query_layer.permute(1, 2, 0, 3)
@@ -1619,9 +1613,11 @@ class CoreAttention(MegatronModule):
         key_layer = _split_into_blocks(key_layer, self.local_context, dim=2)
         value_layer = _split_into_blocks(value_layer, self.local_context, dim=2)
 
-        # Concatenate 3 blocks for keys and values -> (batch_size, n_heads, num_blocks, 3 * block_len, dim_per_head)
-        key_layer = _concatenate_n_blocks(key_layer, block_dim=2, sequence_dim=3, concat_num=3 - causal)
-        value_layer = _concatenate_n_blocks(value_layer, block_dim=2, sequence_dim=3, concat_num=3 - causal)
+        # don't need this with shift
+        if not self.local_context_shift:
+            # Concatenate 3 blocks for keys and values -> (batch_size, n_heads, num_blocks, 3 * block_len, dim_per_head)
+            key_layer = _concatenate_n_blocks(key_layer, block_dim=2, sequence_dim=3, concat_num=3 - causal)
+            value_layer = _concatenate_n_blocks(value_layer, block_dim=2, sequence_dim=3, concat_num=3 - causal)
 
         if global_pos_idx is not None:
             # Tile side inputs across local key/value blocks
@@ -1661,8 +1657,6 @@ class CoreAttention(MegatronModule):
         # [TODO] unified attention_mask dimension
         # attention_mask: [b, 1, sk]
         bs, np, nb, sk = key_layer.shape[:4]
-        sq = query_layer.shape[3]
-
 
         if relative_position_bias is None:
             _, _, attention_mask = build_rel_pos_long_attention(
@@ -1677,24 +1671,11 @@ class CoreAttention(MegatronModule):
                 causal=causal,
                 get_mask=True,
                 vector_only=self.use_flash_attention,
+                shift_mode=self.local_context_shift,
             )
             relative_position_bias = torch.where(attention_mask, -1e10, 0).unsqueeze(0).unsqueeze(0)
         else:
             relative_position_bias = relative_position_bias[..., :nb, :, :sk]
-            # relative_position_bias = relative_position_bias + torch.where(attention_mask, 0.0, -1e10)
-
-            """if causal and not global_attn_separate:
-                causal_mask = build_rel_pos_long_attention(
-                    seq_length=sq0,
-                    use_long_attention=self.use_long_attention,
-                    local_context=self.local_context,
-                    global_block_size=self.global_block_size,
-                    global_segment_pos_idx=(self.position_embedding_type == 'longt5_relative'),
-                    causal=True,
-                    get_mask=True
-                )
-
-                relative_position_bias += torch.where(causal_mask, -1e10, 0)"""
 
         query_layer = rearrange(query_layer, "bs np nb sq hn -> sq (bs nb) np hn")
         key_layer = rearrange(key_layer, "bs np nb sk hn -> sk (bs nb) np hn")

@@ -521,6 +521,7 @@ def build_rel_pos_long_attention(
     get_mask=False,
     decoding=False,
     vector_only=False,
+    shift_mode=False,
 ):
 
     if decoding:
@@ -551,11 +552,18 @@ def build_rel_pos_long_attention(
     pad_len = -seq_length % local_context
     num_blocks = (seq_length + pad_len) // local_context
 
-    memory_position = torch.arange((3 - causal) * local_context, dtype=torch.long, device=device)
-    if vector_only:
-        context_position = memory_position[local_context * 2 - 1].unsqueeze(0)
+    if shift_mode:
+        memory_position = torch.arange(local_context, dtype=torch.long, device=device)
+        if vector_only:
+            context_position = memory_position[local_context - 1].unsqueeze(0)
+        else:
+            context_position = torch.arange(local_context, dtype=torch.long, device=device)
     else:
-        context_position = memory_position[local_context : local_context * 2]
+        memory_position = torch.arange((3 - causal) * local_context, dtype=torch.long, device=device)
+        if vector_only:
+            context_position = memory_position[local_context * 2 - 1].unsqueeze(0)
+        else:
+            context_position = memory_position[local_context : local_context * 2]
     relative_position = memory_position[None, :] - context_position[:, None]
     relative_position = relative_position[None, :].expand(num_blocks, -1, -1)
 
@@ -594,7 +602,8 @@ def build_rel_pos_long_attention(
 
     if get_mask:
         mask = relative_position > 0
-        mask[0, :, : global_tokens + local_context] = True
+        if not shift_mode:
+            mask[0, :, : global_tokens + local_context] = True
 
         if not global_segment_pos_idx:
             # relative_position[:, :, :global_tokens] -= local_context
