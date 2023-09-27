@@ -102,6 +102,9 @@ def _modify_config(gpt_cfg, cfg, add_cfg_to_tree=False):
         if 'global_tokens_cache' in cfg.model:
             gpt_cfg.global_tokens_cache = cfg.model.global_tokens_cache
 
+        if 'relative_distance_limit' in cfg.model:
+            gpt_cfg.relative_distance_limit = cfg.model.relative_distance_limit
+
         sft_cls = MegatronGPTSFTModel
         gpt_cfg.target = f"{sft_cls.__module__}.{sft_cls.__name__}"
 
