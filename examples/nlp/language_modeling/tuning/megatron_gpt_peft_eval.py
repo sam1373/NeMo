@@ -145,6 +145,9 @@ def main(cfg) -> None:
         if 'use_flash_attention' in cfg.model:
             peft_model_cfg.use_flash_attention = cfg.model.use_flash_attention
 
+         if 'seq_len_interpolation_factor' in cfg.model:
+            peft_model_cfg.seq_len_interpolation_factor = cfg.model.seq_len_interpolation_factor
+
         if 'use_long_attention' in cfg.model:
             peft_model_cfg.use_long_attention = cfg.model.use_long_attention
 
