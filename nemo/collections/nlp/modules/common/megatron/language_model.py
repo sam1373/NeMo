@@ -127,6 +127,7 @@ def get_language_model(
     ub_tp_comm_overlap=False,
     use_flash_attention=False,
     seq_len_interpolation_factor=None,
+    enforce_fp32_pos_idx=False,
     use_long_attention=None,
     local_context=128,
     global_block_size=16,
@@ -212,6 +213,7 @@ def get_language_model(
         ub_tp_comm_overlap=ub_tp_comm_overlap,
         use_flash_attention=use_flash_attention,
         seq_len_interpolation_factor=seq_len_interpolation_factor,
+        enforce_fp32_pos_idx=enforce_fp32_pos_idx,
         use_long_attention=use_long_attention,
         local_context=local_context,
         global_block_size=global_block_size,
@@ -528,6 +530,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
         ub_tp_comm_overlap=False,
         use_flash_attention=False,
         seq_len_interpolation_factor=None,
+        enforce_fp32_pos_idx=False,
         use_long_attention=None,
         local_context=128,
         global_block_size=16,
@@ -598,6 +601,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
             self.rotary_pos_emb = RotaryEmbedding(
                 rotary_dim,
                 seq_len_interpolation_factor=seq_len_interpolation_factor,
+                enforce_fp32_pos_idx=enforce_fp32_pos_idx,
             )
 
         elif position_embedding_type == 'alibi':
