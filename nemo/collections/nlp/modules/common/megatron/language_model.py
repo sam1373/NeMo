@@ -595,7 +595,10 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
             assert 0 < rotary_percentage <= 1
             if rotary_percentage < 1:
                 rotary_dim = int(rotary_dim * rotary_percentage)
-            self.rotary_pos_emb = RotaryEmbedding(rotary_dim)
+            self.rotary_pos_emb = RotaryEmbedding(
+                rotary_dim,
+                seq_len_interpolation_factor=seq_len_interpolation_factor,
+            )
 
         elif position_embedding_type == 'alibi':
             # TODO: If this is used for encoder-decodemax_position_embeddingsr model, implement proper logic and following
