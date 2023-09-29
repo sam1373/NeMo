@@ -81,6 +81,9 @@ def _modify_config(gpt_cfg, cfg, add_cfg_to_tree=False):
         if 'use_flash_attention' in cfg.model:
             gpt_cfg.use_flash_attention = cfg.model.use_flash_attention
 
+        if cfg.model.get('enforce_fp32_pos_idx', None) is not None:
+            gpt_cfg.enforce_fp32_pos_idx  = cfg.model.enforce_fp32_pos_idx 
+
         if cfg.model.get('seq_len_interpolation_factor', None) is not None:
             gpt_cfg.seq_len_interpolation_factor = cfg.model.seq_len_interpolation_factor
 
