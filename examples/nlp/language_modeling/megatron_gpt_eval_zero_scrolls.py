@@ -170,7 +170,8 @@ def main(cfg) -> None:
             if cfg.inference.get('seq_len_interpolation_factor', None) is not None:
                 pretrained_cfg.seq_len_interpolation_factor = cfg.inference.seq_len_interpolation_factor
 
-            pretrained_cfg.enforce_fp32_pos_idx = cfg.get('enforce_fp32_pos_idx', False)
+            if cfg.inference.get('enforce_fp32_pos_idx', None) is not None:
+                pretrained_cfg.enforce_fp32_pos_idx = cfg.inference.pretrained_cfg.enforce_fp32_pos_idx
 
             if cfg.get("model", None) is not None and cfg.model.get("encoder", None) is not None:
                 for k, v in cfg.model.encoder.items():
