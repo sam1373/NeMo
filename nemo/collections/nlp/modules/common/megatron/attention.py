@@ -1142,8 +1142,6 @@ class CoreAttention(MegatronModule):
             query_layer.size(3),
         )
 
-        # print(b, np, sq, sk, hn)
-
         use_long_attention = self.use_long_attention if ((self.use_long_attention is not None) and (sq > 1)) else None
         causal = self.attn_mask_type == AttnMaskType.causal
         global_attn_separate = use_long_attention == "global_to_global"
@@ -1153,7 +1151,6 @@ class CoreAttention(MegatronModule):
 
         if sq == 1:
             attention_mask = None
-            causal = False
 
         # ==================================================
         # Update attention mask for inference. [b, np, sq, sk]
@@ -1195,10 +1192,11 @@ class CoreAttention(MegatronModule):
                 query_layer[total_global_tokens:] = apply_rotary_pos_emb(query_layer[total_global_tokens:], q_pos_emb)
                 key_layer[total_global_tokens:] = apply_rotary_pos_emb(key_layer[total_global_tokens:], k_pos_emb)
 
+                # TODO: this is not correct, need to respect distance limit
                 if use_long_attention == "global":
                     non_start_globals = total_global_tokens - self.global_tokens_at_start
 
-                    # TODO: this is not correct, need to respect distance limit
+                    
                     k_pos_global = torch.arange(
                         self.global_tokens_at_start,
                         self.global_tokens_at_start + non_start_globals * self.global_block_size,
@@ -1251,7 +1249,7 @@ class CoreAttention(MegatronModule):
         # relative_position_bias [b, np, sq, sk]
         # context_layer [b, np, sq, hn]
         # ==================================================
-        # if self.layer_number == 1:
+        #if self.layer_number == 1:
         #    print('query_layer', query_layer.shape)
         #    print('key_layer', key_layer.shape)
         context_layer = self.attn_fn(query_layer, key_layer, value_layer, attention_mask, relative_position_bias)
@@ -1321,9 +1319,10 @@ class CoreAttention(MegatronModule):
 
         if self.use_long_attention is not None and self.local_context_shift:
             # shift back
-            context_layer[:, self.num_attention_heads_per_partition // 2 :] = context_layer[
-                :, self.num_attention_heads_per_partition // 2 :
-            ].roll(self.local_context // 2, dims=2)
+            context_layer = torch.cat([
+                context_layer[:, :self.num_attention_heads_per_partition // 2],
+                context_layer[:, self.num_attention_heads_per_partition // 2:].roll(self.local_context // 2, dims=2)
+            ], dim=1)
 
         # [b, np, sq, hn] --> [sq, b, np, hn]
         context_layer = context_layer.permute(2, 0, 1, 3).contiguous()
@@ -1591,15 +1590,18 @@ class CoreAttention(MegatronModule):
                 value_layer = value_layer[total_global_tokens:]
 
         if self.local_context_shift:
-            query_layer[:, :, self.num_attention_heads_per_partition // 2 :] = query_layer[
-                :, :, self.num_attention_heads_per_partition // 2 :
-            ].roll(-self.local_context // 2, dims=0)
-            key_layer[:, :, self.num_attention_heads_per_partition // 2 :] = key_layer[
-                :, :, self.num_attention_heads_per_partition // 2 :
-            ].roll(-self.local_context // 2, dims=0)
-            value_layer[:, :, self.num_attention_heads_per_partition // 2 :] = value_layer[
-                :, :, self.num_attention_heads_per_partition // 2 :
-            ].roll(-self.local_context // 2, dims=0)
+            query_layer = torch.cat([
+                query_layer[:, :, :self.num_attention_heads_per_partition // 2],
+                query_layer[:, :, self.num_attention_heads_per_partition // 2:].roll(-self.local_context // 2, dims=0)
+            ], dim=2)
+            key_layer = torch.cat([
+                key_layer[:, :, :self.num_attention_heads_per_partition // 2],
+                key_layer[:, :, self.num_attention_heads_per_partition // 2:].roll(-self.local_context // 2, dims=0)
+            ], dim=2)
+            value_layer = torch.cat([
+                value_layer[:, :, :self.num_attention_heads_per_partition // 2],
+                value_layer[:, :, self.num_attention_heads_per_partition // 2:].roll(-self.local_context // 2, dims=0)
+            ], dim=2)
 
         # [sq/k, b, np, hn] -> [b, hn, sq/k, np]
         query_layer = query_layer.permute(1, 2, 0, 3)
@@ -1626,6 +1628,8 @@ class CoreAttention(MegatronModule):
             reps[2] = key_layer.shape[2]
             side_k = side_k.unsqueeze(2).repeat(reps)
             side_v = side_v.unsqueeze(2).repeat(reps)
+
+            #TODO: handle globals here
 
             if rotary_pos_emb is not None:
                 _, k_pos_emb = rotary_pos_emb
