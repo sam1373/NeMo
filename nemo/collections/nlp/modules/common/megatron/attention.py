@@ -1198,22 +1198,6 @@ class CoreAttention(MegatronModule):
                     [key_layer[:total_global_tokens],
                      apply_rotary_pos_emb(key_layer[total_global_tokens:], k_pos_emb)], dim=0)
 
-                # TODO: this is not correct, need to respect distance limit
-                if use_long_attention == "global":
-                    non_start_globals = total_global_tokens - self.global_tokens_at_start
-
-                    
-                    k_pos_global = torch.arange(
-                        self.global_tokens_at_start,
-                        self.global_tokens_at_start + non_start_globals * self.global_block_size,
-                        self.global_block_size,
-                        device=key_layer.device,
-                    )
-                    k_pos_global_emb = k_pos_emb[k_pos_global]
-
-                    key_layer[self.global_tokens_at_start : total_global_tokens] = apply_rotary_pos_emb(
-                        key_layer[self.global_tokens_at_start : total_global_tokens], k_pos_global_emb
-                    )
 
             else:
                 query_layer = apply_rotary_pos_emb(query_layer, q_pos_emb)
