@@ -1189,8 +1189,14 @@ class CoreAttention(MegatronModule):
 
             if use_long_attention is not None and global_pos_idx is not None:
                 total_global_tokens = global_pos_idx.shape[1]
-                query_layer[total_global_tokens:] = apply_rotary_pos_emb(query_layer[total_global_tokens:], q_pos_emb)
-                key_layer[total_global_tokens:] = apply_rotary_pos_emb(key_layer[total_global_tokens:], k_pos_emb)
+
+                query_layer = torch.cat(
+                    [query_layer[:total_global_tokens],
+                     apply_rotary_pos_emb(query_layer[total_global_tokens:], q_pos_emb)], dim=0)
+
+                key_layer = torch.cat(
+                    [key_layer[:total_global_tokens],
+                     apply_rotary_pos_emb(key_layer[total_global_tokens:], k_pos_emb)], dim=0)
 
                 # TODO: this is not correct, need to respect distance limit
                 if use_long_attention == "global":
@@ -1629,8 +1635,6 @@ class CoreAttention(MegatronModule):
             side_k = side_k.unsqueeze(2).repeat(reps)
             side_v = side_v.unsqueeze(2).repeat(reps)
 
-            #TODO: handle globals here
-
             if rotary_pos_emb is not None:
                 _, k_pos_emb = rotary_pos_emb
 
@@ -1649,6 +1653,22 @@ class CoreAttention(MegatronModule):
                 side_k[:, :, :, : self.global_tokens_at_start] = apply_rotary_pos_emb(
                     side_k[:, :, :, : self.global_tokens_at_start], rots
                 )
+
+                if self.use_long_attention == "global":
+                    non_start_global_idx = global_pos_idx[:, self.global_tokens_at_start:]
+                    non_start_global_idx = non_start_global_idx.unsqueeze(2).repeat(reps)
+
+                    local_block_starts = torch.arange(0, key_layer.shape[2] * self.local_context, self.local_context, device=global_pos_idx.device)
+                    local_block_starts -= self.relative_distance_limit
+                    local_block_starts = local_block_starts[None, None, :, None, None]
+
+                    non_start_global_idx[non_start_global_idx <= local_block_starts] = local_block_starts[:, :, (non_start_global_idx <= local_block_starts).nonzero()[:, 2]].squeeze()
+
+                    rots = k_pos_emb[non_start_global_idx].squeeze() # blocks x global_tokens x dim
+                    side_k[:, :, :, self.global_tokens_at_start:self.global_tokens_at_start+rots.shape[1]] = apply_rotary_pos_emb(
+                        side_k[:, :, :, self.global_tokens_at_start:self.global_tokens_at_start+rots.shape[1]], rots
+                    )
+
 
             # Concatenate "local" and "side"/"global" key/value states
             # New shape: (batch_size, n_heads, num_blocks, 3 * block_len + global_seq_len, dim_per_head)
