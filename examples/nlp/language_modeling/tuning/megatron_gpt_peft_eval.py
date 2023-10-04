@@ -125,16 +125,49 @@ def main(cfg) -> None:
         # update the model config of the trained model with params we want to set at inference time.
         peft_model_cfg.precision = cfg.trainer.precision
         peft_model_cfg.data.test_ds = cfg.model.data.test_ds
+        peft_model_cfg.micro_batch_size = cfg.model.data.test_ds.micro_batch_size
+        peft_model_cfg.global_batch_size = cfg.model.data.test_ds.global_batch_size
+        max_seq_length = cfg.model.data.test_ds.max_seq_length
+        # Check dataset max_seq_length and max_position_embeddings size
+        if (
+            peft_model_cfg.get('position_embedding_type', None) in [None, 'learned_absolute']
+            and max_seq_length > peft_model_cfg.max_position_embeddings
+        ):
+            logging.warning(
+                f"Set dataset max_seq_length to max_position_embeddings {peft_model_cfg.max_position_embeddings} if using learned_absolute position embedding"
+            )
+            peft_model_cfg.data.test_ds.max_seq_length = peft_model_cfg.max_position_embeddings
+
         peft_model_cfg.activations_checkpoint_granularity = None
         peft_model_cfg.activations_checkpoint_method = None
         peft_model_cfg.activations_checkpoint_layers_per_pipeline = None
-        if peft_model_cfg.get("use_flash_attention", False) or cfg.model.get("use_flash_attention", False):
+
+        if 'use_flash_attention' in cfg.model:
             peft_model_cfg.use_flash_attention = cfg.model.use_flash_attention
-        if peft_model_cfg.get("apply_query_key_layer_scaling", False):
-            peft_model_cfg.apply_query_key_layer_scaling = cfg.model.get('apply_query_key_layer_scaling', True)
-        if cfg.model.get("seq_len_interpolation_factor", None) is not None:
-            peft_model_cfg["seq_len_interpolation_factor"] = cfg.model.seq_len_interpolation_factor
-        peft_model_cfg.enforce_fp32_pos_idx = cfg.model.get('enforce_fp32_pos_idx', False)
+ 
+        if 'enforce_fp32_pos_idx' in cfg.model:
+            peft_model_cfg.enforce_fp32_pos_idx = cfg.model.enforce_fp32_pos_idx
+
+        if 'seq_len_interpolation_factor' in cfg.model:
+            peft_model_cfg.seq_len_interpolation_factor = cfg.model.seq_len_interpolation_factor
+
+        if 'use_long_attention' in cfg.model:
+            peft_model_cfg.use_long_attention = cfg.model.use_long_attention
+
+        if 'use_long_attn_decoding' in cfg.model:
+            peft_model_cfg.use_long_attn_decoding = cfg.model.use_long_attn_decoding
+
+        if 'position_embedding_type' in cfg.model:
+            peft_model_cfg.position_embedding_type = cfg.model.position_embedding_type
+
+        if 'global_block_size' in cfg.model:
+            peft_model_cfg.global_block_size = cfg.model.global_block_size
+
+        if 'local_context' in cfg.model:
+            peft_model_cfg.local_context = cfg.model.local_context
+
+        if 'relative_distance_limit' in cfg.model:
+            peft_model_cfg.relative_distance_limit = cfg.model.relative_distance_limit
 
     with open_dict(cfg):
         # update the config with the trained model config
@@ -168,13 +201,10 @@ def main(cfg) -> None:
         trainer=trainer,
         override_config_path=peft_model_cfg,
         save_restore_connector=save_restore_connector,
+        strict=False,
     )
 
     model.freeze()
-
-    if not cfg.model.use_flash_attention:
-        cfg.inference.compute_attention_mask = True
-
     config = OmegaConf.to_container(cfg.inference, resolve=True)
     model.set_inference_config(config)
 
