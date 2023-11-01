@@ -97,7 +97,7 @@ def post_language_model_processing(
             assert output.dtype == torch.half
             loss = tensor_parallel.vocab_parallel_cross_entropy(output, labels)
         else:
-            loss = tensor_parallel.vocab_parallel_cross_entropy(output.float(), labels)
+            loss = tensor_parallel.vocab_parallel_cross_entropy(output, labels)
 
         toc = time.perf_counter()
 
