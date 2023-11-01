@@ -94,6 +94,12 @@ def _modify_config(gpt_cfg, cfg, add_cfg_to_tree=False):
         if cfg.model.get('limited_context_decoding', None) is not None:
             gpt_cfg.limited_context_decoding = cfg.model.limited_context_decoding
 
+        if cfg.model.get('fp16_lm_cross_entropy', None) is not None:
+            gpt_cfg.fp16_lm_cross_entropy = cfg.model.fp16_lm_cross_entropy
+
+        if cfg.model.get('position_embedding_type', None) is not None:
+            gpt_cfg.position_embedding_type = cfg.model.position_embedding_type
+
         sft_cls = MegatronGPTSFTModel
         gpt_cfg.target = f"{sft_cls.__module__}.{sft_cls.__name__}"
 
@@ -116,6 +122,7 @@ def load_from_nemo(cls, cfg, trainer, gpt_cfg, modify_confg_fn):
         trainer=trainer,
         override_config_path=gpt_cfg,
         save_restore_connector=save_restore_connector,
+        strict=False
     )
     return model
 

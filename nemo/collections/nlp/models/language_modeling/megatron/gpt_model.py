@@ -49,6 +49,7 @@ except (ImportError, ModuleNotFoundError):
 
     HAVE_MEGATRON_CORE = False
 
+import time
 
 def post_language_model_processing(
     lm_output,
@@ -90,11 +91,17 @@ def post_language_model_processing(
         # [b s] -> [s b]
         labels = labels.transpose(0, 1).contiguous()
 
+        tic = time.perf_counter()
+
         if fp16_lm_cross_entropy:
             assert output.dtype == torch.half
             loss = tensor_parallel.vocab_parallel_cross_entropy(output, labels)
         else:
             loss = tensor_parallel.vocab_parallel_cross_entropy(output.float(), labels)
+
+        toc = time.perf_counter()
+
+        print(f"Cross entropy done in {toc - tic:0.4f} seconds")
 
         # [s b] -> [b, s]
         loss = loss.transpose(0, 1).contiguous()

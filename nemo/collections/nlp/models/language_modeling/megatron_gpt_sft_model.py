@@ -38,6 +38,8 @@ from nemo.collections.nlp.parts.mixins.nlp_adapter_mixins import NLPAdapterModel
 from nemo.collections.nlp.parts.utils_funcs import get_last_rank
 from nemo.utils import AppState, logging
 
+import time
+
 try:
     from apex.transformer.pipeline_parallel.utils import (
         _reconfigure_microbatch_calculator,
@@ -323,7 +325,10 @@ class MegatronGPTSFTModel(NLPAdapterModelMixin, MegatronGPTModel):
             return base_key + f"dataloader{dataloader_idx}"
 
     def fwd_bwd_step(self, dataloader_iter, batch_idx, forward_only):
+        tic = time.perf_counter()
         batch = next(dataloader_iter)
+        toc = time.perf_counter()
+        print(f"\nDataloader done in {toc - tic:0.4f} seconds")
         # Pass only torch.Tensor to prevent errors when process get_iterator_k_split()
         batch = {k: v for k, v in batch.items() if isinstance(v, torch.Tensor)}
         _, seq_length = batch['tokens'].shape
