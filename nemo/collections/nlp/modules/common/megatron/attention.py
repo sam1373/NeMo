@@ -600,11 +600,11 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         # =================
         # Output. [sq, b, h]
         # =================
-        tic = time.perf_counter()
+        #tic = time.perf_counter()
         output, bias = self.dense(context_layer)
-        toc = time.perf_counter()
-        if self.layer_number == 1:
-            print(f"Dense in layer 1 done in {toc - tic:0.4f} seconds")
+        #toc = time.perf_counter()
+        #if self.layer_number == 1:
+        #    print(f"Dense in layer 1 done in {toc - tic:0.4f} seconds")
 
         if get_key_value:
             output = [output, present]
@@ -952,13 +952,13 @@ class CoreAttention(MegatronModule):
         # relative_position_bias [b, np, sq, sk]
         # context_layer [b, np, sq, hn]
         # ==================================================
-        tic = time.perf_counter()
+        #tic = time.perf_counter()
         context_layer = self.attn_fn(
             query_layer, key_layer, value_layer, attention_mask, relative_position_bias, inference_mode,
         )
-        toc = time.perf_counter()
-        if self.layer_number == 1:
-            print(f"Attn in layer 1 done in {toc - tic:0.4f} seconds")
+        #toc = time.perf_counter()
+        #if self.layer_number == 1:
+        #    print(f"Attn in layer 1 done in {toc - tic:0.4f} seconds")
 
         if headscale_tensor is not None:
             context_layer = context_layer * headscale_tensor

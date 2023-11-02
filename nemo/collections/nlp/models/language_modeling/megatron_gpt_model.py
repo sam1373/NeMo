@@ -101,6 +101,8 @@ try:
 except (ImportError, ModuleNotFoundError):
     HAVE_TE = False
 
+import time
+
 
 class MegatronGPTExportableModel(torch.nn.Module, Exportable):
     """
@@ -510,6 +512,7 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
         fwd_bwd_function = get_forward_backward_func()
 
         # TODO @akhattar: add num_micro_batches_with_partial_activation_checkpoints when ready
+        tic = time.perf_counter()
         losses_reduced_per_micro_batch = fwd_bwd_function(
             forward_step_func=self.get_forward_output_and_loss_func(forward_only),
             data_iterator=self._make_data_iterator_list(dataloader_iter),
@@ -519,6 +522,8 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
             seq_length=self.cfg.encoder_seq_length,
             micro_batch_size=self.cfg.micro_batch_size,
         )
+        toc = time.perf_counter()
+        print(f"fwd-bwd done in {toc - tic:0.4f} seconds")
 
         # only the last stages of the pipeline return losses
         if losses_reduced_per_micro_batch:
