@@ -89,7 +89,7 @@ def post_language_model_processing(
 
     if labels is None:
         # [s b h] -> [b s h]
-        return output.transpose(0, 1).contiguous()
+        return output.transpose(0, 1).detach()#contiguous()
     else:
         # [b s] -> [s b]
         labels = labels.transpose(0, 1).contiguous()
