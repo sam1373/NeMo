@@ -17,6 +17,8 @@ import torch
 from einops import rearrange
 from torch import einsum, nn
 from nemo.utils import logging
+import random
+from omegaconf import ListConfig
 
 __all__ = ['RotaryEmbedding', 'apply_rotary_pos_emb']
 
@@ -30,7 +32,7 @@ class RotaryEmbedding(nn.Module):
         self,
         dim: int,
         seq_len_interpolation_factor: int = None,
-        base_len: int = None,
+        base_len=None,
         enforce_fp32_pos_idx: bool = False,
         augment_seq: bool = False,
     ):
@@ -46,7 +48,12 @@ class RotaryEmbedding(nn.Module):
         self.seq_len_interpolation_factor = seq_len_interpolation_factor
         inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim))
         self.register_buffer('inv_freq', inv_freq)
-        self.base_len = base_len
+        if not isinstance(base_len, (list, tuple, ListConfig)):
+            self.base_len = base_len
+            self.base_len_min = base_len
+        else:
+            self.base_len = base_len[1]
+            self.base_len_min = base_len[0]
         self.enforce_fp32_pos_idx = enforce_fp32_pos_idx
         self.augment_seq = augment_seq
 
@@ -59,12 +66,18 @@ class RotaryEmbedding(nn.Module):
             seq = torch.arange(max_seq_len, device=self.inv_freq.device, dtype=self.inv_freq.dtype) + offset
 
         if self.augment_seq:
-            seq += torch.rand_like(seq) 
+            seq += torch.rand_like(seq)
 
-        if self.base_len is not None and self.seq_len_interpolation_factor is not None and maybe_interpolate:
-            if max_seq_len > self.base_len * self.seq_len_interpolation_factor:
+        base_len = self.base_len
+
+        if self.base_len_min != self.base_len and self.training:
+            base_len = random.randint(self.base_len_min, self.base_len)
+
+        if base_len is not None and self.seq_len_interpolation_factor is not None and maybe_interpolate:
+
+            if max_seq_len > base_len * self.seq_len_interpolation_factor:
                 # dynamic linear scaling (length > position we have learned)
-                seq *= 1 / (max_seq_len / self.base_len)
+                seq *= 1 / (max_seq_len / base_len)
             else:
                 # fixed linear scaling
                 seq *= 1 / self.seq_len_interpolation_factor
