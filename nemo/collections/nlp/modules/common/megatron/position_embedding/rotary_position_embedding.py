@@ -50,10 +50,20 @@ class RotaryEmbedding(nn.Module):
         self.register_buffer('inv_freq', inv_freq)
         if not isinstance(base_len, (list, tuple, ListConfig)):
             self.base_len = base_len
-            self.base_len_min = base_len
+            self.base_len_min = None
+            self.base_len_max = None
         else:
-            self.base_len = base_len[1]
+            self.base_len_max = base_len[1]
             self.base_len_min = base_len[0]
+            self.base_len = base_len[2]
+        if not isinstance(seq_len_interpolation_factor, (list, tuple, ListConfig)):
+            self.seq_len_interpolation_factor = seq_len_interpolation_factor
+            self.seq_len_interpolation_factor_min = None
+            self.seq_len_interpolation_factor_max = None
+        else:
+            self.seq_len_interpolation_factor_max = base_len[1]
+            self.seq_len_interpolation_factor_min = base_len[0]
+            self.seq_len_interpolation_factor = base_len[2]
         self.enforce_fp32_pos_idx = enforce_fp32_pos_idx
         self.augment_seq = augment_seq
 
@@ -69,18 +79,22 @@ class RotaryEmbedding(nn.Module):
             seq += torch.rand_like(seq)
 
         base_len = self.base_len
+        seq_len_interpolation_factor = self.seq_len_interpolation_factor
 
-        if self.base_len_min != self.base_len and self.training:
-            base_len = random.randint(self.base_len_min, self.base_len)
+        if (self.base_len_min is not None) and self.training:
+            base_len = random.randint(self.base_len_min, self.base_len_max)
 
-        if base_len is not None and self.seq_len_interpolation_factor is not None and maybe_interpolate:
+        if (self.seq_len_interpolation_factor_min is not None) and self.training:
+            seq_len_interpolation_factor = random.randint(self.seq_len_interpolation_factor_min, self.seq_len_interpolation_factor_max)
 
-            if max_seq_len > base_len * self.seq_len_interpolation_factor:
+        if base_len is not None and seq_len_interpolation_factor is not None and maybe_interpolate:
+
+            if max_seq_len > base_len * seq_len_interpolation_factor:
                 # dynamic linear scaling (length > position we have learned)
                 seq *= 1 / (max_seq_len / base_len)
             else:
                 # fixed linear scaling
-                seq *= 1 / self.seq_len_interpolation_factor
+                seq *= 1 / seq_len_interpolation_factor
 
         freqs = einsum('i , j -> i j', seq, self.inv_freq)
         # first part even vector components, second part odd vector components,
