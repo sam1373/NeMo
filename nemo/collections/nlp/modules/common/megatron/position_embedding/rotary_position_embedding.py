@@ -61,9 +61,9 @@ class RotaryEmbedding(nn.Module):
             self.seq_len_interpolation_factor_min = None
             self.seq_len_interpolation_factor_max = None
         else:
-            self.seq_len_interpolation_factor_max = base_len[1]
-            self.seq_len_interpolation_factor_min = base_len[0]
-            self.seq_len_interpolation_factor = base_len[2]
+            self.seq_len_interpolation_factor_max = seq_len_interpolation_factor[1]
+            self.seq_len_interpolation_factor_min = seq_len_interpolation_factor[0]
+            self.seq_len_interpolation_factor = seq_len_interpolation_factor[2]
         self.enforce_fp32_pos_idx = enforce_fp32_pos_idx
         self.augment_seq = augment_seq
 
