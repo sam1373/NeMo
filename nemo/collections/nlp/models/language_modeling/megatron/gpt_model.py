@@ -72,7 +72,7 @@ def post_language_model_processing(
     async_tensor_model_parallel_allreduce = (
         parallel_state.get_tensor_model_parallel_world_size() > 1 and not sequence_parallel
     )
-    tic = time.perf_counter()
+    #tic = time.perf_counter()
     output = parallel_lm_logits(
         lm_output,
         logit_weights,
@@ -81,8 +81,8 @@ def post_language_model_processing(
         gradient_accumulation_fusion=gradient_accumulation_fusion,
         async_tensor_model_parallel_allreduce=async_tensor_model_parallel_allreduce,
     )
-    toc = time.perf_counter()
-    print(f"Parallel logits done in {toc - tic:0.4f} seconds")
+    #toc = time.perf_counter()
+    #print(f"Parallel logits done in {toc - tic:0.4f} seconds")
 
     if get_key_value:
         output = [output, presents]
@@ -94,7 +94,7 @@ def post_language_model_processing(
         # [b s] -> [s b]
         labels = labels.transpose(0, 1).contiguous()
 
-        tic = time.perf_counter()
+        #tic = time.perf_counter()
 
         if fp16_lm_cross_entropy:
             assert output.dtype == torch.half
@@ -102,8 +102,8 @@ def post_language_model_processing(
         else:
             loss = tensor_parallel.vocab_parallel_cross_entropy(output, labels)
 
-        toc = time.perf_counter()
-        print(f"Cross entropy done in {toc - tic:0.4f} seconds")
+        #toc = time.perf_counter()
+        #print(f"Cross entropy done in {toc - tic:0.4f} seconds")
 
         # [s b] -> [b, s]
         loss = loss.transpose(0, 1).contiguous()
@@ -305,7 +305,7 @@ class GPTModel(MegatronModule):
         # input_ids: [b, s]
         # position_ids: [b, s]
         # attention_mask: [1, 1, s, s]
-        tic = time.perf_counter()
+        #tic = time.perf_counter()
         lm_output = self.language_model(
             input_ids,
             position_ids,
@@ -317,8 +317,8 @@ class GPTModel(MegatronModule):
             inference_max_sequence_len=inference_max_sequence_len,
             checkpoint_activations_all_layers=checkpoint_activations_all_layers,
         )
-        toc = time.perf_counter()
-        print(f"LM output done in {toc - tic:0.4f} seconds")
+        #toc = time.perf_counter()
+        #print(f"LM output done in {toc - tic:0.4f} seconds")
 
         if self.post_process:
             if loss_mask is not None:
