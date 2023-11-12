@@ -902,7 +902,7 @@ class CoreAttention(MegatronModule):
         )
 
         if self.layer_number == 1:
-            print(b, sq, sk)
+            print(b, sq, sk, self.window_size)
 
         # ==================================================
         # Update attention mask for inference. [b, np, sq, sk]
