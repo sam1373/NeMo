@@ -349,7 +349,7 @@ class MegatronGPTSFTModel(NLPAdapterModelMixin, MegatronGPTModel):
 
         fwd_bwd_function = get_forward_backward_func()
 
-        tic = time.perf_counter()
+        #tic = time.perf_counter()
         losses_reduced_per_micro_batch = fwd_bwd_function(
             forward_step_func=self.get_forward_output_and_loss_func(),
             data_iterator=data_iter,
@@ -359,8 +359,8 @@ class MegatronGPTSFTModel(NLPAdapterModelMixin, MegatronGPTModel):
             seq_length=seq_length,
             micro_batch_size=get_micro_batch_size(),
         )
-        toc = time.perf_counter()
-        print(f"fwd-bwd done in {toc - tic:0.4f} seconds")
+        #toc = time.perf_counter()
+        #print(f"fwd-bwd done in {toc - tic:0.4f} seconds")
 
         # only the last stages of the pipeline return losses
         if losses_reduced_per_micro_batch:
