@@ -161,15 +161,17 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         self.megatron_legacy = megatron_legacy
         self.dtype = utils_funcs.torch_dtype_from_precision(precision, megatron_amp_O2)
 
-        if window_size is not None and len(window_size) == 3:
-            if self.layer_number <= window_size[2]:
-                self.window_size = [-1, -1]
-            else:
+        if window_size is not None and len(window_size) == 5:
+            if self.layer_number >= window_size[2] and self.layer_number <= window_size[3] and self.layer_number % window_size[4] != 0:
                 self.window_size = window_size[:2]
+            else:
+                self.window_size = [-1, -1]
         else:
             self.window_size = window_size
         self.limited_context_decoding = limited_context_decoding
         self.sink_tokens = 4
+
+        print(self.window_size, self.layer_number)
 
         self.use_flash_attention = use_flash_attention
 
