@@ -171,7 +171,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         self.limited_context_decoding = limited_context_decoding
         self.sink_tokens = 4
 
-        print(self.window_size, self.layer_number)
+        self.decoding_temp = 1.0
 
         self.use_flash_attention = use_flash_attention
 
@@ -592,8 +592,9 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
             q = _cast_if_autocast_enabled(rearrange(apply_rotary_pos_emb(query_layer, rotary_pos_emb[0]), 'sq b np hn -> b sq np hn'))
             k = _cast_if_autocast_enabled(rearrange(apply_rotary_pos_emb(key_layer, rotary_pos_emb[1]), 'sk b np hn -> b sk np hn'))
             v = _cast_if_autocast_enabled(rearrange(value_layer, 'sk b np hn -> b sk np hn'))
+            softmax_scale = self.decoding_temp / math.sqrt(self.hidden_size_per_attention_head)
             context_layer = flash_attn_with_kvcache(
-                q=q, k_cache=k, v_cache=v, causal=self.attn_mask_type == AttnMaskType.causal,
+                q=q, k_cache=k, v_cache=v, causal=self.attn_mask_type == AttnMaskType.causal, softmax_scale=softmax_scale
             )
             context_layer = rearrange(context_layer, 'b sq np hn -> sq b (np hn)')
 
