@@ -53,6 +53,7 @@ class GPTSFTDataset(Dataset):
         hf_dataset: bool = False,
         truncation_method: str = 'right',
         use_flash_attention: bool = False,
+        special_token_every_n: int = 0,
     ):
         """
         file_path: Path to a JSONL GPT supervised fine-tuning dataset. Data is formatted as multiple JSON lines with each line formatted as follows. {'input': 'John von Neumann\nVon Neumann made fundamental contributions .... Q: What did the math of artificial viscosity do?', 'output': 'smoothed the shock transition without sacrificing basic physics'}
@@ -95,6 +96,7 @@ class GPTSFTDataset(Dataset):
         self.tokens_to_generate = tokens_to_generate
         self.truncation_method = truncation_method
         self.use_flash_attention = use_flash_attention
+        self.special_token_every_n = special_token_every_n
 
         if hf_dataset:
             self.indexed_dataset = load_dataset(
@@ -262,7 +264,8 @@ class GPTSFTDataset(Dataset):
             + self.add_sep
             + self.add_eos  # Only training need to consider eos token
         )
-
+        if self.special_token_every_n > 0:
+            total_ids += (sum(len(ids) for ids in context_ids) + self.special_token_every_n - 1) // self.special_token_every_n
         if total_ids > self.max_seq_length:
             truncation_length_total = total_ids - self.max_seq_length
             num_fields = len(self.truncation_fields)
@@ -313,6 +316,12 @@ class GPTSFTDataset(Dataset):
             # (@adithyare) we are going to insert "pad/eos" tokens in the beginning of the text and context
             # these pad/eos tokens are placeholders for virtual tokens
             context_ids = [self.tokenizer.eos_id] * self.virtual_tokens + context_ids
+
+        length = len(context_ids)
+        n = self.special_token_every_n
+        if n > 0:
+            for i in range(0, length + length // n, n):
+                context_ids.insert(i, self.tokenizer.vocab_size - 14)
 
         input_ids = context_ids
         answer_start_idx = len(input_ids)
