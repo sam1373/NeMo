@@ -505,7 +505,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
 
             new_keys = key_layer.size(0)
 
-            if self.limited_context_decoding is not None and self.window_size is not None:
+            if (self.limited_context_decoding == "local" or self.limited_context_decoding == "local_with_sink") and self.window_size is not None:
                 local_context_past = self.window_size[0]
                 retain_kv = min(new_keys, local_context_past)
                 if self.inference_current_sequence_len >= local_context_past:
@@ -561,9 +561,9 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                     assert self.window_size is not None
                     local_context_past = self.window_size[0]
                     if self.inference_current_sequence_len > local_context_past:
-                        offset = self.layer_number % 2
-                        key_layer = torch.cat((key_layer[offset:-local_context_past:2], key_layer[-local_context_past]), dim=0)
-                        value_layer = torch.cat((value_layer[offset:-local_context_past:2], value_layer[-local_context_past]), dim=0)
+                        offset = 0#self.layer_number % 2
+                        key_layer = torch.cat((key_layer[offset:-local_context_past:2], key_layer[-local_context_past:]), dim=0)
+                        value_layer = torch.cat((value_layer[offset:-local_context_past:2], value_layer[-local_context_past:]), dim=0)
                         if attention_mask is not None:
                             attention_mask = torch.cat((attention_mask[..., offset:-local_context_past:2], attention_mask[..., -local_context_past:]), dim=-1)
                         if rotary_pos_emb is not None:
