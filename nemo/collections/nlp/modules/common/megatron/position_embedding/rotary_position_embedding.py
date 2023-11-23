@@ -34,7 +34,7 @@ class RotaryEmbedding(nn.Module):
         seq_len_interpolation_factor: int = None,
         base_len=None,
         enforce_fp32_pos_idx: bool = False,
-        augment_seq: bool = False,
+        augment_seq = False,
     ):
         """
         Args:
@@ -75,8 +75,10 @@ class RotaryEmbedding(nn.Module):
         else:
             seq = torch.arange(max_seq_len, device=self.inv_freq.device, dtype=self.inv_freq.dtype) + offset
 
-        if self.augment_seq:
-            seq += torch.rand_like(seq)
+        if self.augment_seq and self.training:
+            for i in range(self.augment_seq[0]):
+                rand_offset = random.randint(0, seq.shape[0] - 1)
+                seq[rand_offset:] = seq[rand_offset:] + random.randint(0, self.augment_seq[1])
 
         base_len = self.base_len
         seq_len_interpolation_factor = self.seq_len_interpolation_factor
