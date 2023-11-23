@@ -464,12 +464,12 @@ def model_inference_strategy_dispatcher(model, **args):
     if isinstance(model, MegatronGPTPromptLearningModel):
         return PromptLearningModelTextGenerationStrategy(model, **args)
     elif isinstance(model, MegatronGPTModel):
-        if hasattr(model.model, 'limited_context_decoding') and model.model.limited_context_decoding:
+        if hasattr(model.model, 'limited_context_decoding') and (model.model.limited_context_decoding == "local" or model.model.limited_context_decoding == "local_with_sink"):
             return LimitedContextGPTModelTextGenerationStrategy(model)
         if (
             hasattr(model.model, 'module')
             and hasattr(model.model.module, 'language_model')
-            and model.model.module.language_model.limited_context_decoding
+            and (model.model.module.language_model.limited_context_decoding == "local" or model.model.module.language_model.limited_context_decoding == "local_with_sink")
         ):
             return LimitedContextGPTModelTextGenerationStrategy(model)
         return GPTModelTextGenerationStrategy(model)
