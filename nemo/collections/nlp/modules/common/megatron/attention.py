@@ -173,6 +173,8 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
 
         self.decoding_temp = 1.0
 
+        self.decoding_flash_attention = False
+
         self.use_flash_attention = use_flash_attention
 
         self.set_accepted_adapter_types(
@@ -561,13 +563,13 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                     assert self.window_size is not None
                     local_context_past = self.window_size[0]
                     if self.inference_current_sequence_len > local_context_past:
-                        offset = 0#self.layer_number % 2
-                        key_layer = torch.cat((key_layer[offset:-local_context_past:2], key_layer[-local_context_past:]), dim=0)
-                        value_layer = torch.cat((value_layer[offset:-local_context_past:2], value_layer[-local_context_past:]), dim=0)
+                        offset = self.layer_number % 2
+                        key_layer = torch.cat((key_layer[:self.sink_tokens], key_layer[self.sink_tokens + offset:-local_context_past:2], key_layer[-local_context_past:]), dim=0)
+                        value_layer = torch.cat((value_layer[:self.sink_tokens], value_layer[self.sink_tokens + offset:-local_context_past:2], value_layer[-local_context_past:]), dim=0)
                         if attention_mask is not None:
-                            attention_mask = torch.cat((attention_mask[..., offset:-local_context_past:2], attention_mask[..., -local_context_past:]), dim=-1)
+                            attention_mask = torch.cat((attention_mask[..., :self.sink_tokens], attention_mask[..., self.sink_tokens + offset:-local_context_past:2], attention_mask[..., -local_context_past:]), dim=-1)
                         if rotary_pos_emb is not None:
-                            k_pos_emb = torch.cat((k_pos_emb[offset:-local_context_past:2], k_pos_emb[-local_context_past:]), dim=0)
+                            k_pos_emb = torch.cat((k_pos_emb[:self.sink_tokens], k_pos_emb[self.sink_tokens + offset:-local_context_past:2], k_pos_emb[-local_context_past:]), dim=0)
                             rotary_pos_emb = (q_pos_emb, k_pos_emb)
 
 
