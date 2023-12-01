@@ -121,6 +121,11 @@ def main(cfg) -> None:
 
     with open_dict(model_cfg):
         model_cfg.window_size = cfg.model.get('window_size', model_cfg.get('window_size', None))
+        model_cfg.limited_context_decoding = cfg.model.get(
+            'limited_context_decoding', model_cfg.get('limited_context_decoding', None)
+        )
+        model_cfg.special_token_every = cfg.model.get('special_token_every', model_cfg.get('special_token_every', None))
+
 
     model = MegatronGPTSFTModel.restore_from(cfg.model.restore_from_path, model_cfg, trainer=trainer)
 

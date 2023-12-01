@@ -149,6 +149,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         use_flash_attention=False,
         window_size=None,
         limited_context_decoding=None,
+        special_token_every=None,
     ):
         super(ParallelAttention, self).__init__(config=config)
         self.layer_number = max(1, layer_number)
@@ -172,6 +173,15 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         self.sink_tokens = 4
 
         self.decoding_temp = 1.0
+
+        if special_token_every is not None:
+            # [every, until, mode]
+            # [4k, 16k, "first"/"mean_segment"/"mean_all"]
+            self.special_token_mode = special_token_every[2]
+            self.special_token_every = special_token_every[0]
+            self.special_token_until = special_token_every[1]
+        else:
+            self.special_token_mode = None
 
         self.decoding_flash_attention = False
 
@@ -423,6 +433,21 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         # =====================
         # Query, Key, and Value
         # =====================
+
+        if self.special_token_mode is not None:
+            if self.special_token_mode == "first":
+                # Create a sequence of indices for each row in the first dimension of hidden_states
+                indices = torch.arange(hidden_states.size(0), device=hidden_states.device)
+
+                # Create a mask to identify the indices to be replaced
+                replace_mask = (indices % self.special_token_every == 0) & (indices < self.special_token_until)
+
+                # Ensure the replacement vector has the same shape as the rows of hidden_states
+                replacement_vector = hidden_states[0].expand_as(hidden_states)
+
+                # Use the mask to perform the selection
+                hidden_states = torch.where(replace_mask.unsqueeze(1).unsqueeze(2), replacement_vector,
+                                                hidden_states)
 
         if self.attention_type == AttnType.self_attn:
             # Attention heads [sq, b, h] --> [sq, b, (np * 3 * hn)]

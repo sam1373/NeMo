@@ -182,6 +182,7 @@ class GPTModel(MegatronModule):
         limited_context_decoding=None,
         enforce_fp32_pos_idx=False,
         rotary_augment_seq=False,
+        special_token_every=None,
     ):
         super(GPTModel, self).__init__(config=config, share_token_embeddings=share_embeddings_and_output_weights)
 
@@ -272,6 +273,7 @@ class GPTModel(MegatronModule):
             limited_context_decoding=limited_context_decoding,
             enforce_fp32_pos_idx=enforce_fp32_pos_idx,
             rotary_augment_seq=rotary_augment_seq,
+            special_token_every=special_token_every,
         )
 
         if self.share_embeddings_and_output_weights:

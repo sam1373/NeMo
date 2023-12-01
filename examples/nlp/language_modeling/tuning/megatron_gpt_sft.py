@@ -100,6 +100,9 @@ def _modify_config(gpt_cfg, cfg, add_cfg_to_tree=False):
         if cfg.model.get('position_embedding_type', None) is not None:
             gpt_cfg.position_embedding_type = cfg.model.position_embedding_type
 
+        if cfg.model.get('special_token_every', None) is not None:
+            gpt_cfg.special_token_every = cfg.model.special_token_every
+
         sft_cls = MegatronGPTSFTModel
         gpt_cfg.target = f"{sft_cls.__module__}.{sft_cls.__name__}"
 

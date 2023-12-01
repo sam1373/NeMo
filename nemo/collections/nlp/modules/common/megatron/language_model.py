@@ -132,6 +132,7 @@ def get_language_model(
     limited_context_decoding=None,
     enforce_fp32_pos_idx=False,
     rotary_augment_seq=False,
+    special_token_every=None,
 ):
     """Build language model and return along with the key to save."""
 
@@ -214,7 +215,7 @@ def get_language_model(
         limited_context_decoding=limited_context_decoding,
         enforce_fp32_pos_idx=enforce_fp32_pos_idx,
         rotary_augment_seq=rotary_augment_seq,
-
+        special_token_every=special_token_every,
     )
     # key used for checkpoints.
     language_model_key = 'language_model'
@@ -521,6 +522,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
         limited_context_decoding=None,
         enforce_fp32_pos_idx=False,
         rotary_augment_seq=False,
+        special_token_every=None,
     ):
         super(TransformerLanguageModel, self).__init__(
             config=config, share_token_embeddings=share_embeddings_and_output_weights
@@ -674,6 +676,7 @@ class TransformerLanguageModel(MegatronModule, adapter_mixins.AdapterModuleMixin
             use_flash_attention=use_flash_attention,
             window_size=window_size,
             limited_context_decoding=limited_context_decoding,
+            special_token_every=special_token_every,
         )
         self._encoder_key = 'encoder'
 

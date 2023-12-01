@@ -392,6 +392,7 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
                 limited_context_decoding=self.cfg.get('limited_context_decoding', None),
                 enforce_fp32_pos_idx=self.cfg.get('enforce_fp32_pos_idx', False),
                 rotary_augment_seq=self.cfg.get('rotary_augment_seq', False),
+                special_token_every=self.cfg.get('special_token_every', None),
             )
         return model
 
