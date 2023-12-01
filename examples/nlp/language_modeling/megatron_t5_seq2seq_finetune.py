@@ -66,6 +66,20 @@ def _modify_config(t5_cfg, cfg, add_cfg_to_tree=False):
                     t5_cfg.encoder.use_flash_attention = cfg.model.encoder.use_flash_attention
                 if hasattr(cfg.model.encoder, 'attention_dropout'):
                     t5_cfg.encoder.attention_dropout = cfg.model.encoder.attention_dropout
+                if hasattr(cfg.model.encoder, 'seq_len_interpolation_factor'):
+                    t5_cfg.encoder.seq_len_interpolation_factor = cfg.model.encoder.seq_len_interpolation_factor
+                if hasattr(cfg.model.encoder, 'rotary_base_len'):
+                    t5_cfg.encoder.rotary_base_len = cfg.model.encoder.rotary_base_len
+                if hasattr(cfg.model.encoder, 'window_size'):
+                    t5_cfg.encoder.window_size = cfg.model.encoder.window_size
+                if hasattr(cfg.model.encoder, 'enforce_fp32_pos_idx'):
+                    t5_cfg.encoder.enforce_fp32_pos_idx = cfg.model.encoder.enforce_fp32_pos_idx
+                if hasattr(cfg.model.encoder, 'rotary_augment_seq'):
+                    t5_cfg.encoder.rotary_augment_seq = cfg.model.encoder.rotary_augment_seq
+                if hasattr(cfg.model.encoder, 'answer_only_loss'):
+                    t5_cfg.encoder.answer_only_loss = cfg.model.encoder.answer_only_loss
+                if hasattr(cfg.model.encoder, 'special_token_every'):
+                    t5_cfg.encoder.special_token_every = cfg.model.encoder.special_token_every
             if hasattr(cfg.model, 'decoder'):
                 if hasattr(cfg.model.decoder, 'position_embedding_type'):
                     t5_cfg.decoder.position_embedding_type = cfg.model.decoder.position_embedding_type
