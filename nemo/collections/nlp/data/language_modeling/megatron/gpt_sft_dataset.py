@@ -54,6 +54,8 @@ class GPTSFTDataset(Dataset):
         truncation_method: str = 'right',
         use_flash_attention: bool = False,
         special_token_every_n: int = 0,
+        special_tokens_after_context: int = 0,
+        special_tokens_different: bool = False,
     ):
         """
         file_path: Path to a JSONL GPT supervised fine-tuning dataset. Data is formatted as multiple JSON lines with each line formatted as follows. {'input': 'John von Neumann\nVon Neumann made fundamental contributions .... Q: What did the math of artificial viscosity do?', 'output': 'smoothed the shock transition without sacrificing basic physics'}
@@ -97,6 +99,8 @@ class GPTSFTDataset(Dataset):
         self.truncation_method = truncation_method
         self.use_flash_attention = use_flash_attention
         self.special_token_every_n = special_token_every_n
+        self.special_tokens_after_context = special_tokens_after_context
+        self.special_tokens_different = special_tokens_different
 
         if hf_dataset:
             self.indexed_dataset = load_dataset(
@@ -259,7 +263,7 @@ class GPTSFTDataset(Dataset):
         total_ids = (
             self.virtual_tokens
             + sum(len(ids) for ids in context_ids)
-            + max(len(label_ids), self.tokens_to_generate)
+            + max(len(label_ids) + self.special_tokens_after_context, self.tokens_to_generate)
             + self.add_bos
             + self.add_sep
             + self.add_eos  # Only training need to consider eos token
@@ -322,6 +326,13 @@ class GPTSFTDataset(Dataset):
         if n > 0:
             for i in range(0, length + length // n, n):
                 context_ids.insert(i, self.tokenizer.vocab_size - 14)
+        n = self.special_tokens_after_context
+        if n > 0:
+            if self.special_tokens_different:
+                for i in range(n):
+                    answer_ids.insert(0, self.tokenizer.vocab_size - 15 - i)
+            else:
+                answer_ids = [self.tokenizer.vocab_size - 15] * n + answer_ids
 
         input_ids = context_ids
         answer_start_idx = len(input_ids)

@@ -22,6 +22,8 @@ from nemo.collections.common.parts.utils import if_exist
 from nemo.collections.common.tokenizers.tokenizer_spec import TokenizerSpec
 from nemo.utils import logging
 
+import re
+
 __all__ = ['SentencePieceTokenizer', 'create_spt_model']
 
 
@@ -139,8 +141,9 @@ class SentencePieceTokenizer(TokenizerSpec):
 
             text += self.tokenizer.decode_ids(ids[last_i:])
             return text.strip()
-
-        return self.tokenizer.decode_ids(ids)
+        decoded = self.tokenizer.decode_ids(ids)
+        decoded = re.sub(r'<.*?>', '', decoded)
+        return decoded
 
     def token_to_id(self, token):
         if self.legacy and token in self.special_token_to_id:

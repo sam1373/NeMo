@@ -300,6 +300,8 @@ class MegatronGPTSFTModel(NLPAdapterModelMixin, MegatronGPTModel):
                 ),  # used to choose truncation method. Options: ['random', 'left', 'right']
                 use_flash_attention=self.cfg.get('use_flash_attention', False),
                 special_token_every_n=data_cfg.get('special_token_every_n', 0),
+                special_tokens_after_context=data_cfg.get('special_tokens_after_context', 0),
+                special_tokens_different=data_cfg.get('special_tokens_different', False),
             )
             datasets.append(dataset)
 
