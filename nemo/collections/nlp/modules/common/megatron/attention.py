@@ -641,7 +641,7 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                 inference_mode=inference_max_sequence_len is not None and not set_inference_key_value_memory,
             )
 
-        elif self.full_attn_at_end > 0:
+        elif self.full_attn_at_end > 0 and self.training:
 
             query_layer_start = query_layer[:-self.full_attn_at_end]
             query_layer_end = query_layer[-self.full_attn_at_end:]
