@@ -162,11 +162,15 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
         self.megatron_legacy = megatron_legacy
         self.dtype = utils_funcs.torch_dtype_from_precision(precision, megatron_amp_O2)
 
+        self.full_attn_at_end = 0
         if window_size is not None and len(window_size) == 5:
             if self.layer_number >= window_size[2] and self.layer_number <= window_size[3] and self.layer_number % window_size[4] != 0:
                 self.window_size = window_size[:2]
             else:
                 self.window_size = [-1, -1]
+        elif window_size is not None and len(window_size) == 3:
+            self.window_size = window_size[:2]
+            self.full_attn_at_end = window_size[2]
         else:
             self.window_size = window_size
         self.limited_context_decoding = limited_context_decoding
@@ -636,6 +640,58 @@ class ParallelAttention(MegatronModule, adapter_mixins.AdapterModuleMixin):
                 headscale_tensor=self.head_scale_tensor if self.headscale else None,
                 inference_mode=inference_max_sequence_len is not None and not set_inference_key_value_memory,
             )
+
+        elif self.full_attn_at_end > 0:
+
+            query_layer_start = query_layer[:-self.full_attn_at_end]
+            query_layer_end = query_layer[-self.full_attn_at_end:]
+            key_layer_start = key_layer[:-self.full_attn_at_end]
+            #key_layer_end = key_layer[-self.full_attn_at_end:]
+            value_layer_start = value_layer[:-self.full_attn_at_end]
+            #value_layer_end = value_layer[-self.full_attn_at_end:]
+            #attention_mask_start = attention_mask[..., :-self.full_attn_at_end, :-self.full_attn_at_end]
+            #attention_mask_end = attention_mask[..., -self.full_attn_at_end:, -self.full_attn_at_end:]
+            rotary_pos_emb_q_start = rotary_pos_emb[0][:-self.full_attn_at_end]
+            rotary_pos_emb_q_end = rotary_pos_emb[0][-self.full_attn_at_end:]
+            rotary_pos_emb_k_start = rotary_pos_emb[1][:-self.full_attn_at_end]
+            #rotary_pos_emb_k_end = rotary_pos_emb[1][-self.full_attn_at_end:]
+
+            context_layer_start = self.core_attention(
+                query_layer_start,
+                key_layer_start,
+                value_layer_start,
+                attention_mask,
+                rotary_pos_emb=(rotary_pos_emb_q_start, rotary_pos_emb_k_start),
+                relative_position_bias=relative_position_bias,
+                headscale_tensor=self.head_scale_tensor if self.headscale else None,
+                inference_mode=False,
+            )
+
+            query_layer_end = _cast_if_autocast_enabled(rearrange(apply_rotary_pos_emb(query_layer_end, rotary_pos_emb_q_end), 'sq b np hn -> b sq np hn'))
+            k = _cast_if_autocast_enabled(rearrange(apply_rotary_pos_emb(key_layer, rotary_pos_emb[1]), 'sk b np hn -> b sk np hn'))
+            v = _cast_if_autocast_enabled(rearrange(value_layer, 'sk b np hn -> b sk np hn'))
+            context_layer_end = flash_attn_with_kvcache(
+                q=query_layer_end, k_cache=k, v_cache=v, causal=self.attn_mask_type == AttnMaskType.causal
+            )
+            context_layer_end = rearrange(context_layer_end, 'b sq np hn -> sq b (np hn)')
+
+            context_layer = torch.cat((context_layer_start, context_layer_end), dim=0)
+
+            """content_layer_original = self.core_attention(
+                query_layer,
+                key_layer,
+                value_layer,
+                attention_mask,
+                layer_past=layer_past,
+                get_key_value=get_key_value,
+                rotary_pos_emb=rotary_pos_emb,
+                relative_position_bias=relative_position_bias,
+                headscale_tensor=self.head_scale_tensor if self.headscale else None,
+                inference_mode=inference_max_sequence_len is not None and not set_inference_key_value_memory,
+            )"""
+
+            #print()
+
         else:
             context_layer = self.core_attention(
                 query_layer,
