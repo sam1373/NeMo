@@ -180,6 +180,13 @@ def get_computeprob_response(tokenizer, response, inputs):
         compute_prob_response['logprob'] = log_probs
         compute_prob_response['full_logprob'] = full_logprobs
         compute_prob_response['offsets'] = offsets
+
+        if full_logprobs is not None:
+            top_values, top_indices = torch.topk(full_logprobs[0], 5, dim=-1)
+            best_choices = [[(tokenizer.vocab[int(idx)], round(value.item(), 2)) for idx, value in zip(indices, values)] for
+                            indices, values in zip(top_indices, top_values)]
+            compute_prob_response['top_candidates'] = best_choices
+
         return compute_prob_response
     else:
         # intermediate stages
