@@ -58,12 +58,23 @@ def _modify_config(gpt_cfg, cfg, add_cfg_to_tree=False):
         gpt_cfg.resume_from_checkpoint = cfg.model.resume_from_checkpoint
         gpt_cfg.gradient_as_bucket_view = cfg.model.gradient_as_bucket_view
         gpt_cfg.encoder_seq_length = cfg.model.encoder_seq_length
-        gpt_cfg.max_position_embeddings = cfg.model.max_position_embeddings
-        gpt_cfg.seq_len_interpolation_factor = cfg.model.seq_len_interpolation_factor
         gpt_cfg.use_flash_attention = cfg.model.use_flash_attention
         gpt_cfg.tensor_model_parallel_size = cfg.model.get('tensor_model_parallel_size', 1)
         gpt_cfg.pipeline_model_parallel_size = cfg.model.get('pipeline_model_parallel_size', 1)
         gpt_cfg.pipeline_model_parallel_split_rank = cfg.model.get('pipeline_model_parallel_split_rank', 0)
+
+        # don't change these unless explicitly provided
+        if 'seq_len_interpolation_factor' in cfg.model:
+            gpt_cfg.seq_len_interpolation_factor = cfg.model['seq_len_interpolation_factor']
+        if 'rotary_augment_seq' in cfg.model:
+            gpt_cfg.rotary_augment_seq = cfg.model['rotary_augment_seq']
+        if 'pretrained_max_position_embeddings' in cfg.model:
+            gpt_cfg.pretrained_max_position_embeddings = cfg.model['pretrained_max_position_embeddings']
+        if 'rotary_base' in cfg.model:
+            gpt_cfg.rotary_base = cfg.model['rotary_base']
+        if 'rotary_percentage' in cfg.model:
+            gpt_cfg.rotary_percentage = cfg.model['rotary_percentage']
+
 
         # This is needed when modifying a hparam file directly to load `.ckpt` files.
         # This is not needed to modify the cfg in `.nemo` files.

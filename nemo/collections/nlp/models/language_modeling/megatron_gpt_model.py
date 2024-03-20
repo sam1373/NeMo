@@ -391,6 +391,8 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
                 rotary_percent=self.cfg.get('rotary_percentage', 1.0),
                 seq_len_interpolation_factor=self.cfg.get('seq_len_interpolation_factor', None),
                 rotary_base=self.cfg.get('rotary_base', 10000),
+                pretrained_max_position_embeddings=self.cfg.get('pretrained_max_position_embeddings', None),
+                augment_seq=self.cfg.get('rotary_augment_seq', None),
             )
             if self.cfg.get("apply_embedding_scaling", False):
                 extend_instance(model.embedding, EmbeddingScalingMixin)
@@ -418,6 +420,7 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
                 init_method_std=self.cfg.get('init_method_std', 0.02),
                 use_scaled_init_method=self.cfg.get('use_scaled_init_method', True),
                 fp16_lm_cross_entropy=self.cfg.get('fp16_lm_cross_entropy', False),
+                megatron_amp_O2=self.cfg.get('megatron_amp_O2', False),
                 hidden_dropout=self.cfg.get('hidden_dropout', 0.1),
                 attention_dropout=self.cfg.get('attention_dropout', 0.1),
                 ffn_dropout=self.cfg.get('ffn_dropout', 0.0),
@@ -461,6 +464,8 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
                 megatron_legacy=self.cfg.get('megatron_legacy', False),
                 seq_len_interpolation_factor=self.cfg.get('seq_len_interpolation_factor', None),
                 rotary_base=self.cfg.get('rotary_base', 10000),
+                pretrained_max_position_embeddings=self.cfg.get('pretrained_max_position_embeddings', None),
+                augment_seq=self.cfg.get('rotary_augment_seq', None),
             )
             if self.cfg.get("apply_embedding_scaling", False):
                 extend_instance(model.language_model.embedding, EmbeddingScalingMixin)
@@ -1019,6 +1024,16 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
             # slice batch along sequence dimension for context parallelism
             batch = self.get_batch_on_this_context_parallel_rank(batch)
 
+            # by default, we don't augment during validation
+            need_to_augment = not validation_step
+            if not validation_step:
+                need_to_augment = True
+            else:
+                augment_seq = self.cfg.get('rotary_augment_seq', None)
+                if augment_seq and augment_seq.get('inference', False):
+                    need_to_augment = True
+                else:
+                    need_to_augment = False
             # Model forward pass
             forward_args = {
                 'input_ids': batch['tokens'],
@@ -1026,6 +1041,7 @@ class MegatronGPTModel(MegatronBaseModel, TextGeneration):
                 'attention_mask': None if self.get_attention_mask_from_fusion else batch['attention_mask'],
                 'labels': batch['labels'] if 'labels' in batch else None,
                 'loss_mask': batch['loss_mask'],
+                'training_step': need_to_augment,
             }
 
             if not self.mcore_gpt:
