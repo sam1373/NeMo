@@ -474,6 +474,7 @@ def synced_generate(
     min_tokens_to_generate=0,
     image_list=None,
 ):
+    compute_attention_mask = False
     context_length = context_length_tensor.min().item()
     tokenizer = model.tokenizer
     if isinstance(tokenizer, TabularTokenizer):

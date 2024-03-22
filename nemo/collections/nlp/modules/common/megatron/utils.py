@@ -210,6 +210,8 @@ def get_ltor_masks_and_position_ids(
     else:
         att_mask_batch = 1
 
+   compute_attention_mask = False
+
     attention_mask = None
     if compute_attention_mask:
         attention_mask = torch.tril(torch.ones((att_mask_batch, seq_length, seq_length), device=data.device)).view(
